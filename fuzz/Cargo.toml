@@ -1,0 +1,31 @@
+
+[package]
+name = "tiny-art-fuzz"
+version = "0.0.1"
+authors = ["Automatically generated"]
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1.0.3", features = ["derive"] }
+
+[dependencies.tiny-art]
+path = ".."
+
+[dependencies.libfuzzer-sys]
+version = "0.4.0"
+features = ["arbitrary-derive"]
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "ops"
+path = "fuzz_targets/ops.rs"
+
+[[bin]]
+name = "long_ops"
+path = "fuzz_targets/long_ops.rs"

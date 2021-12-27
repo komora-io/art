@@ -1,0 +1,12 @@
+[package]
+name = "art"
+version = "0.1.0"
+edition = "2021"
+authors = ["Tyler Neely <t@jujit.su>"]
+description = "adaptive radix trie"
+license = "GPL-3.0"
+repository = "https://github.com/spacejam/art"
+documentation = "https://docs.rs/art/"
+
+[profile.release]
+debug = true
