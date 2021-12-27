@@ -2,7 +2,7 @@
 #[macro_use]
 extern crate libfuzzer_sys;
 extern crate arbitrary;
-extern crate tiny_art;
+extern crate art;
 
 use arbitrary::Arbitrary;
 
@@ -13,7 +13,7 @@ enum Op {
 }
 
 fuzz_target!(|ops: Vec<Op>| {
-    let mut art = tiny_art::Art::default();
+    let mut art = art::Art::default();
     let mut model = std::collections::HashMap::new();
 
     /*

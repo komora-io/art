@@ -2,7 +2,7 @@ fn main() {
 
     const N: u64 = 100_000_000;
 
-    let mut art = tiny_art::Art::new();
+    let mut art = art::Art::new();
 
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {

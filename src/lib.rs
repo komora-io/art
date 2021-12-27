@@ -67,7 +67,7 @@ impl<V> Node4<V> {
     fn child(&self, byte: u8) -> Option<&Node<V>> {
         for idx in 0..4 {
             if self.keys[idx] == byte && !self.slots[idx].is_none() {
-                return Some(&self.slots[idx])
+                return Some(&self.slots[idx]);
             }
         }
         None
@@ -130,7 +130,7 @@ impl<V> Node16<V> {
     fn child(&self, byte: u8) -> Option<&Node<V>> {
         for idx in 0..16 {
             if self.keys[idx] == byte && !self.slots[idx].is_none() {
-                return Some(&self.slots[idx])
+                return Some(&self.slots[idx]);
             }
         }
         None
@@ -158,10 +158,7 @@ impl<V> Node16<V> {
         let mut n48 = Node48::default();
         for (slot, byte) in self.keys.iter().enumerate() {
             if !self.slots[slot].is_none() {
-                std::mem::swap(
-                    &mut self.slots[slot],
-                    &mut n48.slots[slot],
-                );
+                std::mem::swap(&mut self.slots[slot], &mut n48.slots[slot]);
                 n48.child_index[*byte as usize] = u8::try_from(slot).unwrap();
             }
         }
@@ -235,7 +232,8 @@ impl<V> Node48<V> {
 }
 
 fn slots_array<V, const N: usize>() -> [Node<V>; N] {
-    let mut raw_slots: [MaybeUninit<Node<V>>; N]= unsafe { MaybeUninit::<[MaybeUninit<Node<V>>; N]>::uninit().assume_init() };
+    let mut raw_slots: [MaybeUninit<Node<V>>; N] =
+        unsafe { MaybeUninit::<[MaybeUninit<Node<V>>; N]>::uninit().assume_init() };
     for idx in 0..N {
         raw_slots[idx].write(Node::None);
     }
@@ -286,9 +284,7 @@ pub struct Art<V, const K: usize> {
 
 impl<V, const K: usize> Default for Art<V, K> {
     fn default() -> Art<V, K> {
-        Art {
-            root: Node::None
-        }
+        Art { root: Node::None }
     }
 }
 
@@ -299,8 +295,10 @@ impl<V> Node<V> {
     }
 
     fn assert_size(&self) {
-        let occupied = self.slots().iter().filter(|s| !s.is_none()).count();
-        assert_eq!(occupied, self.len())
+        debug_assert_eq!(
+            self.slots().iter().filter(|s| !s.is_none()).count(),
+            self.len(),
+        )
     }
 
     fn slots(&self) -> &[Node<V>] {
@@ -401,7 +399,34 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
         Art::default()
     }
 
-    pub fn insert(&mut self, key: [u8; K], value: V) -> Option<V> {
+    pub fn insert(&mut self, key: [u8; K], mut value: V) -> Option<V> {
+        let cursor = self.slot_for_key(&key);
+        match cursor {
+            Node::Value(ref mut old) => {
+                std::mem::swap(&mut **old, &mut value);
+                Some(value)
+            }
+            Node::None => {
+                *cursor = Node::Value(Box::new(value));
+                None
+            }
+            wut => unreachable!("{:?}", wut),
+        }
+    }
+
+    pub fn remove(&mut self, key: &[u8; K]) -> Option<V> {
+        let cursor = self.slot_for_key(key);
+        match std::mem::take(cursor) {
+            Node::Value(old) => {
+                *cursor = Node::None;
+                Some(*old)
+            }
+            Node::None => None,
+            wut => unreachable!("{:?}", wut),
+        }
+    }
+
+    fn slot_for_key(&mut self, key: &[u8; K]) -> &mut Node<V> {
         let mut path: &[u8] = &key[..];
         let mut cursor: &mut Node<V> = &mut self.root;
         //println!("cursor is now {:?}", cursor);
@@ -421,6 +446,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
             }
 
             cursor.assert_size();
+
             let prefix = cursor.prefix();
             if !path.starts_with(prefix) {
                 // expand path at shared prefix
@@ -459,18 +485,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
             cursor = cursor.child_mut(next_byte);
         }
 
-        let new = Box::new(value);
-        match cursor {
-            Node::Value(ref mut old) => {
-                let taken = std::mem::replace(old, new);
-                Some(*taken)
-            }
-            Node::None => {
-                *cursor = Node::Value(new);
-                None
-            }
-            wut => unreachable!("{:?}", wut),
-        }
+        cursor
     }
 
     pub fn get(&self, key: &[u8; K]) -> Option<&V> {
