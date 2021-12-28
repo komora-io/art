@@ -15,11 +15,10 @@ const VALUE_HEADER: Header = Header {
 };
 
 #[derive(Debug, Default, Clone, Copy)]
-#[repr(packed)]
 struct Header {
+    children: u16,
     path: [u8; MAX_PREFIX],
     path_len: u8,
-    children: u16,
 }
 
 #[derive(Debug)]
@@ -73,7 +72,7 @@ impl<V> Node4<V> {
         None
     }
 
-    fn child_mut(&mut self, byte: u8) -> Option<&mut Node<V>> {
+    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
         let idx_opt = self.keys.iter().position(|i| *i == byte).and_then(|idx| {
             if !self.slots[idx].is_none() {
                 Some(idx)
@@ -82,12 +81,11 @@ impl<V> Node4<V> {
             }
         });
         if let Some(idx) = idx_opt {
-            Some(&mut self.slots[idx])
+            (&mut self.header.children, &mut self.slots[idx])
         } else {
             let free_slot = self.free_slot().unwrap();
-            self.header.children += 1;
             self.keys[free_slot] = byte;
-            Some(&mut self.slots[free_slot])
+            (&mut self.header.children, &mut self.slots[free_slot])
         }
     }
 
@@ -136,7 +134,7 @@ impl<V> Node16<V> {
         None
     }
 
-    fn child_mut(&mut self, byte: u8) -> Option<&mut Node<V>> {
+    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
         let idx_opt = self.keys.iter().position(|i| *i == byte).and_then(|idx| {
             if !self.slots[idx].is_none() {
                 Some(idx)
@@ -145,12 +143,11 @@ impl<V> Node16<V> {
             }
         });
         if let Some(idx) = idx_opt {
-            Some(&mut self.slots[idx])
+            (&mut self.header.children, &mut self.slots[idx])
         } else {
             let free_slot = self.free_slot().unwrap();
-            self.header.children += 1;
             self.keys[free_slot] = byte;
-            Some(&mut self.slots[free_slot])
+            (&mut self.header.children, &mut self.slots[free_slot])
         }
     }
 
@@ -205,16 +202,15 @@ impl<V> Node48<V> {
         }
     }
 
-    fn child_mut(&mut self, byte: u8) -> Option<&mut Node<V>> {
+    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
         let idx = self.child_index[byte as usize];
 
         if idx == 255 {
-            let free_slot = self.free_slot()?;
+            let free_slot = self.free_slot().unwrap();
             self.child_index[byte as usize] = u8::try_from(free_slot).unwrap();
-            self.header.children += 1;
-            Some(&mut self.slots[free_slot])
+            (&mut self.header.children, &mut self.slots[free_slot])
         } else {
-            Some(&mut self.slots[idx as usize])
+            (&mut self.header.children, &mut self.slots[idx as usize])
         }
     }
 
@@ -259,12 +255,9 @@ impl<V> Node256<V> {
         }
     }
 
-    fn child_mut(&mut self, byte: u8) -> &mut Node<V> {
+    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
         let slot = &mut self.slots[byte as usize];
-        if slot.is_none() {
-            self.header.children = self.header.children.checked_add(1).unwrap();
-        }
-        slot
+        (&mut self.header.children, slot)
     }
 }
 
@@ -279,16 +272,47 @@ impl<V> Default for Node256<V> {
 
 #[derive(Debug)]
 pub struct Art<V, const K: usize> {
+    len: usize,
     root: Node<V>,
 }
 
 impl<V, const K: usize> Default for Art<V, K> {
     fn default() -> Art<V, K> {
-        Art { root: Node::None }
+        Art { len: 0, root: Node::None }
     }
 }
 
 impl<V> Node<V> {
+    fn truncate_prefix(&mut self, path: &[u8]) {
+        // expand path at shared prefix
+        //println!("chopping off a prefix at node {:?} since our path is {:?}", cursor.header(), path);
+        let prefix = self.prefix();
+
+        let shared_bytes = path
+            .iter()
+            .zip(prefix.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+
+        let mut new_node4 = Node4::default();
+        new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
+        new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
+
+        let new_node = Node::Node4(Box::new(new_node4));
+
+        assert!(prefix.starts_with(new_node.prefix()));
+
+        let mut old_cursor = std::mem::replace(self, new_node);
+
+        let old_cursor_header = old_cursor.header_mut();
+        let old_cursor_new_child_byte = old_cursor_header.path[shared_bytes];
+        old_cursor_header.path.rotate_left(shared_bytes + 1);
+        old_cursor_header.path_len -= u8::try_from(shared_bytes + 1).unwrap();
+
+        let (_, child) = self.child_mut(old_cursor_new_child_byte);
+        *child = old_cursor;
+    }
+
     #[inline]
     fn is_none(&self) -> bool {
         matches!(self, Node::None)
@@ -362,7 +386,7 @@ impl<V> Node<V> {
         }
     }
 
-    fn child_mut<'a>(&'a mut self, byte: u8) -> &'a mut Node<V> {
+    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
         // TODO this is gross
         if self.child(byte).is_none() && self.is_full() {
             self.upgrade()
@@ -372,11 +396,10 @@ impl<V> Node<V> {
             Node::Node4(n4) => n4.child_mut(byte),
             Node::Node16(n16) => n16.child_mut(byte),
             Node::Node48(n48) => n48.child_mut(byte),
-            Node::Node256(n256) => return n256.child_mut(byte),
+            Node::Node256(n256) => n256.child_mut(byte),
             Node::None => unreachable!(),
             Node::Value(_) => unreachable!(),
         }
-        .unwrap()
     }
 
     fn upgrade(&mut self) {
@@ -399,8 +422,12 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
         Art::default()
     }
 
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
     pub fn insert(&mut self, key: [u8; K], mut value: V) -> Option<V> {
-        let cursor = self.slot_for_key(&key);
+        let (parent_opt, cursor) = self.slot_for_key(&key, true);
         match cursor {
             Node::Value(ref mut old) => {
                 std::mem::swap(&mut **old, &mut value);
@@ -408,39 +435,55 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
             }
             Node::None => {
                 *cursor = Node::Value(Box::new(value));
+                if let Some(children) = parent_opt {
+                    *children = children.checked_add(1).unwrap();
+                }
+                self.len += 1;
                 None
             }
-            wut => unreachable!("{:?}", wut),
+            _ => unreachable!(),
         }
     }
 
     pub fn remove(&mut self, key: &[u8; K]) -> Option<V> {
-        let cursor = self.slot_for_key(key);
+        let (parent_opt, cursor) = self.slot_for_key(key, false);
         match std::mem::take(cursor) {
             Node::Value(old) => {
                 *cursor = Node::None;
+                if let Some(children) = parent_opt {
+                    *children = children.checked_sub(1).unwrap();
+                }
+                self.len -= 1;
                 Some(*old)
             }
-            Node::None => None,
-            wut => unreachable!("{:?}", wut),
+            Node::None => {
+                None
+            }
+            _ => unreachable!(),
         }
     }
 
-    fn slot_for_key(&mut self, key: &[u8; K]) -> &mut Node<V> {
+    // returns the optional parent node for child maintenance, and the value node
+    fn slot_for_key(&mut self, key: &[u8; K], is_add: bool) -> (Option<&mut u16>, &mut Node<V>) {
+        let mut parent = None;
         let mut path: &[u8] = &key[..];
         let mut cursor: &mut Node<V> = &mut self.root;
-        //println!("cursor is now {:?}", cursor);
+        println!("root is {:?}", cursor);
 
         while !path.is_empty() {
             //println!("path: {:?} cursor {:?}", path, cursor);
             if cursor.is_none() {
-                //println!("adding Node4 into None slot");
+                if !is_add {
+                    return (parent, cursor);
+                }
                 *cursor = Node::Node4(Box::new(Node4::default()));
                 let prefix_len = (path.len() - 1).min(MAX_PREFIX);
                 let prefix = &path[..prefix_len];
                 cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
                 cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
-                cursor = cursor.child_mut(path[prefix_len]);
+                let (p, child) = cursor.child_mut(path[prefix_len]);
+                parent = Some(p);
+                cursor = child;
                 path = &path[prefix_len + 1..];
                 continue;
             }
@@ -449,32 +492,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
 
             let prefix = cursor.prefix();
             if !path.starts_with(prefix) {
-                // expand path at shared prefix
-                //println!("chopping off a prefix at node {:?} since our path is {:?}", cursor.header(), path);
-
-                let shared_bytes = path
-                    .iter()
-                    .zip(prefix.iter())
-                    .take_while(|(a, b)| a == b)
-                    .count();
-
-                let mut new_node4 = Node4::default();
-                new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
-                new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
-
-                let new_node = Node::Node4(Box::new(new_node4));
-
-                assert!(prefix.starts_with(new_node.prefix()));
-
-                let mut old_cursor = std::mem::replace(cursor, new_node);
-
-                let old_cursor_header = old_cursor.header_mut();
-                let old_cursor_new_child_byte = old_cursor_header.path[shared_bytes];
-                old_cursor_header.path.rotate_left(shared_bytes + 1);
-                old_cursor_header.path_len -= u8::try_from(shared_bytes + 1).unwrap();
-
-                *cursor.child_mut(old_cursor_new_child_byte) = old_cursor;
-
+                cursor.truncate_prefix(path);
                 continue;
             }
 
@@ -482,10 +500,12 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
             path = &path[prefix.len() + 1..];
 
             //println!("cursor is now {:?}", cursor);
-            cursor = cursor.child_mut(next_byte);
+            let (p, next_cursor) = cursor.child_mut(next_byte);
+            cursor = next_cursor;
+            parent = Some(p);
         }
 
-        cursor
+        (parent, cursor)
     }
 
     pub fn get(&self, key: &[u8; K]) -> Option<&V> {
