@@ -289,6 +289,7 @@ impl<V, const K: usize> Default for Art<V, K> {
 
 impl<V> Node<V> {
     fn truncate_prefix(&mut self, path: &[u8]) {
+        //println!("truncating prefix");
         // expand path at shared prefix
         //println!("chopping off a prefix at node {:?} since our path is {:?}", cursor.header(), path);
         let prefix = self.prefix();
@@ -580,4 +581,50 @@ fn test_inserts() {
     assert_eq!(art.insert([20, 20], "k 0 v 3"), Some("k 0 v 2"));
     assert_eq!(art.insert([20, 192], "k 1 v 3"), Some("k 1 v 2"));
     */
+}
+
+#[test]
+fn regression_00() {
+    let mut art: Art<u8, 1> = Art::new();
+
+    art.insert([37], 38);
+    art.insert([0], 1);
+    assert_eq!(art.len(), 2);
+
+    art.insert([5], 5);
+    art.insert([1], 9);
+    art.insert([0], 0);
+    art.insert([255], 255);
+    art.insert([0], 0);
+    art.insert([47], 0);
+    art.insert([253], 37);
+    assert_eq!(art.len(), 7);
+
+    art.insert([10], 0,);
+    art.insert([38], 28,);
+    art.insert([24], 28,);
+    assert_eq!(art.len(), 10);
+
+    art.insert([28], 30,);
+    art.insert([30], 30,);
+    art.insert([28], 15,);
+    art.insert([51], 48,);
+    art.insert([53], 255,);
+    art.insert([59], 58,);
+    art.insert([58], 58,);
+    assert_eq!(art.len(), 16);
+    assert_eq!(art.remove(&[85]), None);
+    assert_eq!(art.len(), 16);
+    art.insert([30], 30,);
+    art.insert([30], 0,);
+    art.insert([30], 0,);
+    assert_eq!(art.len(), 16);
+    art.insert([143], 254,);
+    assert_eq!(art.len(), 17);
+    art.insert([30], 30,);
+    assert_eq!(art.len(), 17);
+    assert_eq!(art.len(), 17);
+    println!("{:?}", art);
+    assert_eq!(art.remove(&[85]), None);
+    assert_eq!(art.len(), 17);
 }
