@@ -207,7 +207,9 @@ impl<V> Node48<V> {
 
         if idx == 255 {
             let free_slot = self.free_slot().unwrap();
-            self.child_index[byte as usize] = u8::try_from(free_slot).unwrap();
+            if !clear_child_index {
+                self.child_index[byte as usize] = u8::try_from(free_slot).unwrap();
+            }
             (&mut self.header.children, &mut self.slots[free_slot])
         } else {
             if clear_child_index {
@@ -312,7 +314,7 @@ impl<V> Node<V> {
         old_cursor_header.path.rotate_left(shared_bytes + 1);
         old_cursor_header.path_len -= u8::try_from(shared_bytes + 1).unwrap();
 
-        let (_, child) = self.child_mut(old_cursor_new_child_byte, false);
+        let (_, child) = self.child_mut(old_cursor_new_child_byte, false).unwrap();
         *child = old_cursor;
     }
 
@@ -389,20 +391,23 @@ impl<V> Node<V> {
         }
     }
 
-    fn child_mut(&mut self, byte: u8, clear_child_index: bool) -> (&mut u16, &mut Node<V>) {
+    fn child_mut(&mut self, byte: u8, clear_child_index: bool) -> Option<(&mut u16, &mut Node<V>)> {
         // TODO this is gross
         if self.child(byte).is_none() && self.is_full() {
+            if clear_child_index {
+                return None;
+            }
             self.upgrade()
         }
 
-        match self {
+        Some(match self {
             Node::Node4(n4) => n4.child_mut(byte),
             Node::Node16(n16) => n16.child_mut(byte),
             Node::Node48(n48) => n48.child_mut(byte, clear_child_index),
             Node::Node256(n256) => n256.child_mut(byte),
             Node::None => unreachable!(),
             Node::Value(_) => unreachable!(),
-        }
+        })
     }
 
     fn upgrade(&mut self) {
@@ -430,7 +435,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
     }
 
     pub fn insert(&mut self, key: [u8; K], mut value: V) -> Option<V> {
-        let (parent_opt, cursor) = self.slot_for_key(&key, true);
+        let (parent_opt, cursor) = self.slot_for_key(&key, true).unwrap();
         match cursor {
             Node::Value(ref mut old) => {
                 std::mem::swap(&mut **old, &mut value);
@@ -449,10 +454,9 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
     }
 
     pub fn remove(&mut self, key: &[u8; K]) -> Option<V> {
-        let (parent_opt, cursor) = self.slot_for_key(key, false);
+        let (parent_opt, cursor) = self.slot_for_key(key, false)?;
         match std::mem::take(cursor) {
             Node::Value(old) => {
-                *cursor = Node::None;
                 if let Some(children) = parent_opt {
                     *children = children.checked_sub(1).unwrap();
                 }
@@ -467,24 +471,24 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
     }
 
     // returns the optional parent node for child maintenance, and the value node
-    fn slot_for_key(&mut self, key: &[u8; K], is_add: bool) -> (Option<&mut u16>, &mut Node<V>) {
+    fn slot_for_key(&mut self, key: &[u8; K], is_add: bool) -> Option<(Option<&mut u16>, &mut Node<V>)> {
         let mut parent = None;
         let mut path: &[u8] = &key[..];
         let mut cursor: &mut Node<V> = &mut self.root;
-        println!("root is {:?}", cursor);
+        //println!("root is {:?}", cursor);
 
         while !path.is_empty() {
             //println!("path: {:?} cursor {:?}", path, cursor);
             if cursor.is_none() {
                 if !is_add {
-                    return (parent, cursor);
+                    return Some((parent, cursor));
                 }
                 *cursor = Node::Node4(Box::new(Node4::default()));
                 let prefix_len = (path.len() - 1).min(MAX_PREFIX);
                 let prefix = &path[..prefix_len];
                 cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
                 cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
-                let (p, child) = cursor.child_mut(path[prefix_len], false);
+                let (p, child) = cursor.child_mut(path[prefix_len], false).unwrap();
                 parent = Some(p);
                 cursor = child;
                 path = &path[prefix_len + 1..];
@@ -504,12 +508,17 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
 
             //println!("cursor is now {:?}", cursor);
             let clear_child_index = !is_add && path.is_empty();
-            let (p, next_cursor) = cursor.child_mut(next_byte, clear_child_index);
+            let (p, next_cursor) = if let Some(opt) = cursor.child_mut(next_byte, clear_child_index) {
+                opt
+            } else {
+                assert!(clear_child_index);
+                return None;
+            };
             cursor = next_cursor;
             parent = Some(p);
         }
 
-        (parent, cursor)
+        Some((parent, cursor))
     }
 
     pub fn get(&self, key: &[u8; K]) -> Option<&V> {
