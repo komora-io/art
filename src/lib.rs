@@ -316,6 +316,9 @@ impl<V> Node<V> {
 
         let (_, child) = self.child_mut(old_cursor_new_child_byte, false).unwrap();
         *child = old_cursor;
+        child.assert_size();
+
+        self.header_mut().children = 1;
     }
 
     #[inline]
@@ -472,18 +475,24 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
 
     // returns the optional parent node for child maintenance, and the value node
     fn slot_for_key(&mut self, key: &[u8; K], is_add: bool) -> Option<(Option<&mut u16>, &mut Node<V>)> {
-        let mut parent = None;
+        let mut parent: Option<&mut u16> = None;
         let mut path: &[u8] = &key[..];
         let mut cursor: &mut Node<V> = &mut self.root;
-        //println!("root is {:?}", cursor);
+        // println!("root is {:?}", cursor);
 
         while !path.is_empty() {
-            //println!("path: {:?} cursor {:?}", path, cursor);
+            // println!("path: {:?} cursor {:?}", path, cursor);
+            cursor.assert_size();
             if cursor.is_none() {
                 if !is_add {
-                    return Some((parent, cursor));
+                    return None;
                 }
+                // we need to create intermediate nodes before
+                // populating the value for this insert
                 *cursor = Node::Node4(Box::new(Node4::default()));
+                if let Some(children) = parent {
+                    *children = children.checked_add(1).unwrap();
+                }
                 let prefix_len = (path.len() - 1).min(MAX_PREFIX);
                 let prefix = &path[..prefix_len];
                 cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
@@ -495,10 +504,11 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 continue;
             }
 
-            cursor.assert_size();
-
             let prefix = cursor.prefix();
             if !path.starts_with(prefix) {
+                // path compression needs to be reduced
+                // to allow for this key, which does not
+                // share the compressed path.
                 cursor.truncate_prefix(path);
                 continue;
             }
