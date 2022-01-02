@@ -202,7 +202,7 @@ impl<V> Node48<V> {
         }
     }
 
-    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
+    fn child_mut(&mut self, byte: u8, clear_child_index: bool) -> (&mut u16, &mut Node<V>) {
         let idx = self.child_index[byte as usize];
 
         if idx == 255 {
@@ -210,6 +210,9 @@ impl<V> Node48<V> {
             self.child_index[byte as usize] = u8::try_from(free_slot).unwrap();
             (&mut self.header.children, &mut self.slots[free_slot])
         } else {
+            if clear_child_index {
+                self.child_index[byte as usize] = 255;
+            }
             (&mut self.header.children, &mut self.slots[idx as usize])
         }
     }
@@ -309,7 +312,7 @@ impl<V> Node<V> {
         old_cursor_header.path.rotate_left(shared_bytes + 1);
         old_cursor_header.path_len -= u8::try_from(shared_bytes + 1).unwrap();
 
-        let (_, child) = self.child_mut(old_cursor_new_child_byte);
+        let (_, child) = self.child_mut(old_cursor_new_child_byte, false);
         *child = old_cursor;
     }
 
@@ -386,7 +389,7 @@ impl<V> Node<V> {
         }
     }
 
-    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
+    fn child_mut(&mut self, byte: u8, clear_child_index: bool) -> (&mut u16, &mut Node<V>) {
         // TODO this is gross
         if self.child(byte).is_none() && self.is_full() {
             self.upgrade()
@@ -395,7 +398,7 @@ impl<V> Node<V> {
         match self {
             Node::Node4(n4) => n4.child_mut(byte),
             Node::Node16(n16) => n16.child_mut(byte),
-            Node::Node48(n48) => n48.child_mut(byte),
+            Node::Node48(n48) => n48.child_mut(byte, clear_child_index),
             Node::Node256(n256) => n256.child_mut(byte),
             Node::None => unreachable!(),
             Node::Value(_) => unreachable!(),
@@ -481,7 +484,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 let prefix = &path[..prefix_len];
                 cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
                 cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
-                let (p, child) = cursor.child_mut(path[prefix_len]);
+                let (p, child) = cursor.child_mut(path[prefix_len], false);
                 parent = Some(p);
                 cursor = child;
                 path = &path[prefix_len + 1..];
@@ -500,7 +503,8 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
             path = &path[prefix.len() + 1..];
 
             //println!("cursor is now {:?}", cursor);
-            let (p, next_cursor) = cursor.child_mut(next_byte);
+            let clear_child_index = !is_add && path.is_empty();
+            let (p, next_cursor) = cursor.child_mut(next_byte, clear_child_index);
             cursor = next_cursor;
             parent = Some(p);
         }
