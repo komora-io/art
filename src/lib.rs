@@ -288,18 +288,21 @@ impl<V, const K: usize> Default for Art<V, K> {
 }
 
 impl<V> Node<V> {
-    fn truncate_prefix(&mut self, path: &[u8]) {
-        //println!("truncating prefix");
+    fn truncate_prefix(&mut self, partial_path: &[u8]) {
+        // println!("truncating prefix");
         // expand path at shared prefix
-        //println!("chopping off a prefix at node {:?} since our path is {:?}", cursor.header(), path);
+        //println!("chopping off a prefix at node {:?} since our partial path is {:?}", cursor.header(), partial_path);
         let prefix = self.prefix();
 
-        let shared_bytes = path
+        let shared_bytes = partial_path
             .iter()
             .zip(prefix.iter())
             .take_while(|(a, b)| a == b)
             .count();
 
+        let reduction = prefix.len() - shared_bytes;
+
+        println!("truncated node has path of len {} with a reduction of {}", shared_bytes, reduction);
         let mut new_node4 = Node4::default();
         new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
         new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
@@ -312,8 +315,12 @@ impl<V> Node<V> {
 
         let old_cursor_header = old_cursor.header_mut();
         let old_cursor_new_child_byte = old_cursor_header.path[shared_bytes];
-        old_cursor_header.path.rotate_left(shared_bytes + 1);
-        old_cursor_header.path_len -= u8::try_from(shared_bytes + 1).unwrap();
+
+        // we add +1 to the reduction because
+        // we must account for the extra byte
+        // reduced from the node's fan-out itself.
+        old_cursor_header.path.rotate_left(reduction + 1);
+        old_cursor_header.path_len -= u8::try_from(reduction + 1).unwrap();
 
         let (_, child) = self.child_mut(old_cursor_new_child_byte, false).unwrap();
         *child = old_cursor;
@@ -506,11 +513,14 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
             }
 
             let prefix = cursor.prefix();
-            if !path.starts_with(prefix) {
+            let partial_path = &path[..path.len() - 1];
+            if !partial_path.starts_with(prefix)  {
                 // path compression needs to be reduced
                 // to allow for this key, which does not
                 // share the compressed path.
-                cursor.truncate_prefix(path);
+                println!("truncating cursor at {:?}", cursor);
+                cursor.truncate_prefix(&path[..path.len() - 1]);
+                println!("cursor is now after truncation {:?}", cursor);
                 continue;
             }
 
@@ -627,4 +637,13 @@ fn regression_00() {
     println!("{:?}", art);
     assert_eq!(art.remove(&[85]), None);
     assert_eq!(art.len(), 17);
+}
+
+#[test]
+fn regression_01() {
+    let mut art: Art<u8, 3> = Art::new();
+
+    assert_eq!(art.insert([0, 0, 0], 0), None);
+    assert_eq!(art.insert([0, 11, 0], 1), None);
+    assert_eq!(art.insert([0, 0, 0], 2), Some(0));
 }
