@@ -14,6 +14,75 @@ const VALUE_HEADER: Header = Header {
     path: [0; MAX_PREFIX],
 };
 
+pub struct Iter<'a, V, const K: usize> {
+    root: NodeIter<'a, V>,
+    path: Vec<(u8, NodeIter<'a, V>)>,
+}
+
+impl<'a, V: std::fmt::Debug, const K: usize> IntoIterator for &'a Art<V, K> {
+    type IntoIter = Iter<'a, V, K>;
+    type Item = ([u8; K], &'a V);
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
+    type Item = ([u8; K], &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+
+        let (vc, v) = loop {
+            if self.path.is_empty() {
+                let (c, node) = self.root.children.next()?;
+                self.path.push((c, node.node_iter()));
+            }
+            match self.path.last_mut().unwrap().1.children.next() {
+                Some((c, node)) => {
+                    match node {
+                        Node::Value(v) => break (c, v),
+                        Node::None => unreachable!(),
+                        other => self.path.push((c, other.node_iter())),
+                    }
+                }
+                None => {
+                    self.path.pop();
+                    continue;
+                }
+            }
+        };
+
+        let mut k = [0; K];
+        let mut written = 0;
+        let root_prefix = self.root.node.prefix();
+        k[..root_prefix.len()].copy_from_slice(root_prefix);
+        written += root_prefix.len();
+
+        for (c, node_iter) in &self.path {
+            k[written] = *c;
+            written += 1;
+
+            let node_prefix = node_iter.node.prefix();
+
+            k[written..written + node_prefix.len()].copy_from_slice(node_prefix);
+            written += node_prefix.len();
+        }
+
+        k[written] = vc;
+        written += 1;
+
+        assert_eq!(written, K);
+
+        Some((k, v))
+    }
+}
+
+struct NodeIter<'a, V> {
+    node: &'a Node<V>,
+    children: Box<dyn 'a + Iterator<Item = (u8, &'a Node<V>)>>,
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 struct Header {
     children: u16,
@@ -57,6 +126,19 @@ impl<V> Default for Node4<V> {
 impl<V> Node4<V> {
     fn slots(&self) -> &[Node<V>] {
         &self.slots
+    }
+
+    fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
+        let mut pairs: [(u8, &Node<V>); 4] = [
+            (self.keys[0], &self.slots[0]),
+            (self.keys[1], &self.slots[1]),
+            (self.keys[2], &self.slots[2]),
+            (self.keys[3], &self.slots[3]),
+        ];
+
+        pairs.sort_unstable_by_key(|(k, _)| *k);
+
+        pairs.into_iter().filter(|(_, n)| !n.is_none())
     }
 
     fn free_slot(&self) -> Option<usize> {
@@ -121,6 +203,31 @@ impl<V> Node16<V> {
         &self.slots
     }
 
+    fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
+        let mut pairs: [(u8, &Node<V>); 16] = [
+            (self.keys[0], &self.slots[0]),
+            (self.keys[1], &self.slots[1]),
+            (self.keys[2], &self.slots[2]),
+            (self.keys[3], &self.slots[3]),
+            (self.keys[4], &self.slots[4]),
+            (self.keys[5], &self.slots[5]),
+            (self.keys[6], &self.slots[6]),
+            (self.keys[7], &self.slots[7]),
+            (self.keys[8], &self.slots[8]),
+            (self.keys[9], &self.slots[9]),
+            (self.keys[10], &self.slots[10]),
+            (self.keys[11], &self.slots[11]),
+            (self.keys[12], &self.slots[12]),
+            (self.keys[13], &self.slots[13]),
+            (self.keys[14], &self.slots[14]),
+            (self.keys[15], &self.slots[15]),
+        ];
+
+        pairs.sort_unstable_by_key(|(k, _)| *k);
+
+        pairs.into_iter().filter(|(_, n)| !n.is_none())
+    }
+
     fn free_slot(&self) -> Option<usize> {
         self.slots.iter().position(Node::is_none)
     }
@@ -156,6 +263,7 @@ impl<V> Node16<V> {
         for (slot, byte) in self.keys.iter().enumerate() {
             if !self.slots[slot].is_none() {
                 std::mem::swap(&mut self.slots[slot], &mut n48.slots[slot]);
+                assert_eq!(n48.child_index[*byte as usize], 255);
                 n48.child_index[*byte as usize] = u8::try_from(slot).unwrap();
             }
         }
@@ -185,20 +293,22 @@ impl<V> Node48<V> {
         &self.slots
     }
 
+    fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
+        self.child_index.iter()
+            .filter(|i| **i != 255 && !self.slots[**i as usize].is_none())
+            .map(|i| (*i, &self.slots[*i as usize]))
+    }
+
     fn free_slot(&self) -> Option<usize> {
         self.slots.iter().position(Node::is_none)
     }
 
     fn child(&self, byte: u8) -> Option<&Node<V>> {
         let idx = self.child_index[byte as usize];
-        if idx == 255 {
+        if idx == 255 || self.slots[idx as usize].is_none() {
             None
         } else {
-            if self.slots[idx as usize].is_none() {
-                None
-            } else {
-                Some(&self.slots[idx as usize])
-            }
+            Some(&self.slots[idx as usize])
         }
     }
 
@@ -252,6 +362,11 @@ impl<V> Node256<V> {
         &self.slots
     }
 
+    fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
+        self.slots.iter().enumerate().filter(|(_, slot)| !slot.is_none())
+            .map(|(i, slot)| (u8::try_from(i).unwrap(), slot))
+    }
+
     fn child(&self, byte: u8) -> Option<&Node<V>> {
         if self.slots[byte as usize].is_none() {
             None
@@ -300,9 +415,7 @@ impl<V> Node<V> {
             .take_while(|(a, b)| a == b)
             .count();
 
-        let reduction = prefix.len() - shared_bytes;
-
-        println!("truncated node has path of len {} with a reduction of {}", shared_bytes, reduction);
+        println!("truncated node has path of len {} with a reduction of {}", shared_bytes, prefix.len() - shared_bytes);
         let mut new_node4 = Node4::default();
         new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
         new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
@@ -316,11 +429,13 @@ impl<V> Node<V> {
         let old_cursor_header = old_cursor.header_mut();
         let old_cursor_new_child_byte = old_cursor_header.path[shared_bytes];
 
-        // we add +1 to the reduction because
-        // we must account for the extra byte
+        // we add +1 because we must account for the extra byte
         // reduced from the node's fan-out itself.
-        old_cursor_header.path.rotate_left(reduction + 1);
-        old_cursor_header.path_len -= u8::try_from(reduction + 1).unwrap();
+        old_cursor_header.path.rotate_left(shared_bytes + 1);
+        old_cursor_header.path_len =
+            old_cursor_header.path_len.checked_sub(
+                u8::try_from(shared_bytes + 1).unwrap()
+            ).unwrap();
 
         let (_, child) = self.child_mut(old_cursor_new_child_byte, false).unwrap();
         *child = old_cursor;
@@ -434,6 +549,24 @@ impl<V> Node<V> {
         };
         *self.header_mut() = old_header;
     }
+
+    fn node_iter<'a>(&'a self) -> NodeIter<'a, V> {
+        let children: Box<dyn 'a + Iterator<Item = (u8, &Node<V>)>> = match self {
+            Node::Node4(n4) => Box::new(n4.node_iter()),
+            Node::Node16(n16) => Box::new(n16.node_iter()),
+            Node::Node48(n48) => Box::new(n48.node_iter()),
+            Node::Node256(n256) => Box::new(n256.node_iter()),
+
+            // this is only an iterator over nodes, not leaf values
+            Node::None => Box::new([].into_iter()),
+            Node::Value(_) => Box::new([].into_iter()),
+        };
+
+        NodeIter {
+            node: self,
+            children
+        }
+    }
 }
 
 impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
@@ -486,10 +619,10 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
         let mut parent: Option<&mut u16> = None;
         let mut path: &[u8] = &key[..];
         let mut cursor: &mut Node<V> = &mut self.root;
-        // println!("root is {:?}", cursor);
+        println!("root is {:?}", cursor);
 
         while !path.is_empty() {
-            // println!("path: {:?} cursor {:?}", path, cursor);
+            println!("path: {:?} cursor {:?}", path, cursor);
             cursor.assert_size();
             if cursor.is_none() {
                 if !is_add {
@@ -501,7 +634,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
-                let prefix_len = (path.len() - 1).min(MAX_PREFIX);
+                let prefix_len = 0; //(path.len() - 1).min(MAX_PREFIX);
                 let prefix = &path[..prefix_len];
                 cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
                 cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
@@ -519,7 +652,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 // to allow for this key, which does not
                 // share the compressed path.
                 println!("truncating cursor at {:?}", cursor);
-                cursor.truncate_prefix(&path[..path.len() - 1]);
+                cursor.truncate_prefix(partial_path);
                 println!("cursor is now after truncation {:?}", cursor);
                 continue;
             }
@@ -560,6 +693,14 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 &Node::None => return None,
                 _ => cursor = child,
             }
+        }
+    }
+
+    pub fn iter(&self) -> Iter<'_, V, K> {
+
+        Iter {
+            root: self.root.node_iter(),
+            path: vec![],
         }
     }
 }
@@ -646,4 +787,9 @@ fn regression_01() {
     assert_eq!(art.insert([0, 0, 0], 0), None);
     assert_eq!(art.insert([0, 11, 0], 1), None);
     assert_eq!(art.insert([0, 0, 0], 2), Some(0));
+
+    assert_eq!(art.iter().collect::<Vec<_>>(), vec![
+        ([0, 0, 0], &2),
+        ([0, 11, 0], &1),
+    ]);
 }
