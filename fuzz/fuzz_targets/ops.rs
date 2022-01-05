@@ -12,7 +12,6 @@ enum Op {
     Remove(u8),
     Get(u8),
     Len,
-
 }
 
 fuzz_target!(|ops: Vec<Op>| {
@@ -39,6 +38,10 @@ fuzz_target!(|ops: Vec<Op>| {
             Op::Len => {
                 assert_eq!(art.len(), model.len());
             }
-        }
-    }
+        };
+
+        let a = art.iter().map(|(k, v)| v).collect::<Vec<_>>();
+        let m = model.iter().map(|(k, v)| v).collect::<Vec<_>>();
+        assert_eq!(a, m);
+    };
 });

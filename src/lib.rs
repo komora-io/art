@@ -28,7 +28,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> IntoIterator for &'a Art<V, K> {
     }
 }
 
-impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
+impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
     type Item = ([u8; K], &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -36,11 +36,18 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
         // iterators until we reach a leaf.
         let (vc, v) = loop {
             if self.path.is_empty() {
+                println!("src/lib.rs:39");
                 let (c, node) = self.root.children.next()?;
-                self.path.push((c, node.node_iter()));
+                println!("src/lib.rs:41");
+                match node {
+                    Node::Value(v) => break (c, v),
+                    Node::None => unreachable!(),
+                    other => self.path.push((c, other.node_iter())),
+                }
             }
             match self.path.last_mut().unwrap().1.children.next() {
                 Some((c, node)) => {
+                    println!("src/lib.rs:46");
                     match node {
                         Node::Value(v) => break (c, v),
                         Node::None => unreachable!(),
@@ -48,6 +55,7 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
                     }
                 }
                 None => {
+                    println!("src/lib.rs:54");
                     self.path.pop();
                     continue;
                 }
@@ -124,7 +132,7 @@ impl<V> Default for Node4<V> {
     }
 }
 
-impl<V> Node4<V> {
+impl<V: std::fmt::Debug> Node4<V> {
     fn slots(&self) -> &[Node<V>] {
         &self.slots
     }
@@ -139,7 +147,10 @@ impl<V> Node4<V> {
 
         pairs.sort_unstable_by_key(|(k, _)| *k);
 
-        pairs.into_iter().filter(|(_, n)| !n.is_none())
+        dbg!(pairs.into_iter().filter(|(k, n)| {
+            println!("looking at k, n: {:?} {:?}", k, n);
+            !n.is_none()
+        }))
     }
 
     fn free_slot(&self) -> Option<usize> {
@@ -199,7 +210,7 @@ impl<V> Default for Node16<V> {
     }
 }
 
-impl<V> Node16<V> {
+impl<V: std::fmt::Debug> Node16<V> {
     fn slots(&self) -> &[Node<V>] {
         &self.slots
     }
@@ -289,7 +300,7 @@ impl<V> Default for Node48<V> {
     }
 }
 
-impl<V> Node48<V> {
+impl<V: std::fmt::Debug> Node48<V> {
     fn slots(&self) -> &[Node<V>] {
         &self.slots
     }
@@ -358,7 +369,7 @@ struct Node256<V> {
     slots: [Node<V>; 256],
 }
 
-impl<V> Node256<V> {
+impl<V: std::fmt::Debug> Node256<V> {
     fn slots(&self) -> &[Node<V>] {
         &self.slots
     }
@@ -403,7 +414,7 @@ impl<V, const K: usize> Default for Art<V, K> {
     }
 }
 
-impl<V> Node<V> {
+impl<V: std::fmt::Debug> Node<V> {
     fn truncate_prefix(&mut self, partial_path: &[u8]) {
         // println!("truncating prefix");
         // expand path at shared prefix
@@ -789,6 +800,8 @@ fn regression_01() {
     assert_eq!(art.insert([0, 11, 0], 1), None);
     assert_eq!(art.insert([0, 0, 0], 2), Some(0));
 
+    let a = art.iter().map(|(k, v)| v).collect::<Vec<_>>();
+    let m = model.iter().map(|(k, v)| v).collect::<Vec<_>>();
     assert_eq!(art.iter().collect::<Vec<_>>(), vec![
         ([0, 0, 0], &2),
         ([0, 11, 0], &1),
