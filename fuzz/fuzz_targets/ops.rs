@@ -40,8 +40,8 @@ fuzz_target!(|ops: Vec<Op>| {
             }
         };
 
-        let a = art.iter().map(|(k, v)| v).collect::<Vec<_>>();
-        let m = model.iter().map(|(k, v)| v).collect::<Vec<_>>();
+        let a = art.iter().map(|(_, v)| v).collect::<Vec<_>>();
+        let m = model.iter().map(|(_, v)| v).collect::<Vec<_>>();
         assert_eq!(a, m);
     };
 });

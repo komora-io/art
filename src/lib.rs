@@ -45,7 +45,6 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
             }
             match self.path.last_mut().unwrap().1.children.next() {
                 Some((c, node)) => {
-                    println!("src/lib.rs:46");
                     match node {
                         Node::Value(v) => break (c, v),
                         Node::None => unreachable!(),
