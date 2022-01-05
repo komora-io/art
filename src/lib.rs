@@ -32,7 +32,8 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
     type Item = ([u8; K], &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
-
+        // find next value, populating intermediate
+        // iterators until we reach a leaf.
         let (vc, v) = loop {
             if self.path.is_empty() {
                 let (c, node) = self.root.children.next()?;
@@ -90,7 +91,7 @@ struct Header {
     path_len: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Node<V> {
     None,
     Node4(Box<Node4<V>>),
@@ -106,7 +107,7 @@ impl<V> Default for Node<V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Node4<V> {
     header: Header,
     keys: [u8; 4],
@@ -181,7 +182,7 @@ impl<V> Node4<V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Node16<V> {
     header: Header,
     keys: [u8; 16],
@@ -271,7 +272,7 @@ impl<V> Node16<V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Node48<V> {
     header: Header,
     child_index: [u8; 256],
@@ -351,7 +352,7 @@ fn slots_array<V, const N: usize>() -> [Node<V>; N] {
     unsafe { (&raw_slots as *const _ as *const [Node<V>; N]).read() }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Node256<V> {
     header: Header,
     slots: [Node<V>; 256],
@@ -390,7 +391,7 @@ impl<V> Default for Node256<V> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Art<V, const K: usize> {
     len: usize,
     root: Node<V>,
