@@ -32,13 +32,15 @@ fn expand(k: [u8; 3]) -> [u8; 10] {
 
 fuzz_target!(|ops: Vec<Op>| {
     let mut art = art::Art::default();
-    let mut model = std::collections::HashMap::new();
+    let mut model = std::collections::BTreeMap::new();
 
+    /*
     println!();
     println!("~~~~~~~~~~~~~~~");
     println!();
+    */
     for op in ops {
-        println!("op: {:?}", op);
+        // println!("op: {:?}", op);
         match op {
             Op::Insert(k, v) => {
                 assert_eq!(art.insert(expand(k), v), model.insert(expand(k), v));
@@ -53,5 +55,10 @@ fuzz_target!(|ops: Vec<Op>| {
                 assert_eq!(art.len(), model.len());
             }
         }
+
+        assert_eq!(
+            art.iter().collect::<Vec<_>>(),
+            model.iter().collect::<Vec<_>>(),
+        );
     }
 });

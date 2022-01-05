@@ -16,7 +16,7 @@ enum Op {
 
 fuzz_target!(|ops: Vec<Op>| {
     let mut art = art::Art::default();
-    let mut model = std::collections::HashMap::new();
+    let mut model = std::collections::BTreeMap::new();
 
     /*
     println!();

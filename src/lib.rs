@@ -36,9 +36,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
         // iterators until we reach a leaf.
         let (vc, v) = loop {
             if self.path.is_empty() {
-                println!("src/lib.rs:39");
                 let (c, node) = self.root.children.next()?;
-                println!("src/lib.rs:41");
                 match node {
                     Node::Value(v) => break (c, v),
                     Node::None => unreachable!(),
@@ -55,7 +53,6 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
                     }
                 }
                 None => {
-                    println!("src/lib.rs:54");
                     self.path.pop();
                     continue;
                 }
@@ -147,10 +144,7 @@ impl<V: std::fmt::Debug> Node4<V> {
 
         pairs.sort_unstable_by_key(|(k, _)| *k);
 
-        dbg!(pairs.into_iter().filter(|(k, n)| {
-            println!("looking at k, n: {:?} {:?}", k, n);
-            !n.is_none()
-        }))
+        pairs.into_iter().filter(|(_, n)| !n.is_none())
     }
 
     fn free_slot(&self) -> Option<usize> {
@@ -427,7 +421,7 @@ impl<V: std::fmt::Debug> Node<V> {
             .take_while(|(a, b)| a == b)
             .count();
 
-        println!("truncated node has path of len {} with a reduction of {}", shared_bytes, prefix.len() - shared_bytes);
+        // println!("truncated node has path of len {} with a reduction of {}", shared_bytes, prefix.len() - shared_bytes);
         let mut new_node4 = Node4::default();
         new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
         new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
@@ -631,10 +625,10 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
         let mut parent: Option<&mut u16> = None;
         let mut path: &[u8] = &key[..];
         let mut cursor: &mut Node<V> = &mut self.root;
-        println!("root is {:?}", cursor);
+        // println!("root is {:?}", cursor);
 
         while !path.is_empty() {
-            println!("path: {:?} cursor {:?}", path, cursor);
+            // println!("path: {:?} cursor {:?}", path, cursor);
             cursor.assert_size();
             if cursor.is_none() {
                 if !is_add {
@@ -663,9 +657,9 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 // path compression needs to be reduced
                 // to allow for this key, which does not
                 // share the compressed path.
-                println!("truncating cursor at {:?}", cursor);
+                // println!("truncating cursor at {:?}", cursor);
                 cursor.truncate_prefix(partial_path);
-                println!("cursor is now after truncation {:?}", cursor);
+                // println!("cursor is now after truncation {:?}", cursor);
                 continue;
             }
 
@@ -787,7 +781,6 @@ fn regression_00() {
     art.insert([30], 30,);
     assert_eq!(art.len(), 17);
     assert_eq!(art.len(), 17);
-    println!("{:?}", art);
     assert_eq!(art.remove(&[85]), None);
     assert_eq!(art.len(), 17);
 }
