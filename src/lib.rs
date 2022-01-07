@@ -129,10 +129,6 @@ impl<V> Default for Node4<V> {
 }
 
 impl<V: std::fmt::Debug> Node4<V> {
-    fn slots(&self) -> &[Node<V>] {
-        &self.slots
-    }
-
     fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
         let mut pairs: [(u8, &Node<V>); 4] = [
             (self.keys[0], &self.slots[0]),
@@ -204,10 +200,6 @@ impl<V> Default for Node16<V> {
 }
 
 impl<V: std::fmt::Debug> Node16<V> {
-    fn slots(&self) -> &[Node<V>] {
-        &self.slots
-    }
-
     fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
         let mut pairs: [(u8, &Node<V>); 16] = [
             (self.keys[0], &self.slots[0]),
@@ -294,10 +286,6 @@ impl<V> Default for Node48<V> {
 }
 
 impl<V: std::fmt::Debug> Node48<V> {
-    fn slots(&self) -> &[Node<V>] {
-        &self.slots
-    }
-
     fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
         self.child_index.iter()
             .filter(|i| **i != 255 && !self.slots[**i as usize].is_none())
@@ -363,10 +351,6 @@ struct Node256<V> {
 }
 
 impl<V: std::fmt::Debug> Node256<V> {
-    fn slots(&self) -> &[Node<V>] {
-        &self.slots
-    }
-
     fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
         self.slots.iter().enumerate().filter(|(_, slot)| !slot.is_none())
             .map(|(i, slot)| (u8::try_from(i).unwrap(), slot))
@@ -456,19 +440,18 @@ impl<V: std::fmt::Debug> Node<V> {
 
     fn assert_size(&self) {
         debug_assert_eq!(
-            self.slots().iter().filter(|s| !s.is_none()).count(),
+            {
+                let slots: &[Node<V>] = match self {
+                    Node::Node4(n4) => &n4.slots,
+                    Node::Node16(n16) => &n16.slots,
+                    Node::Node48(n48) => &n48.slots,
+                    Node::Node256(n256) => &n256.slots,
+                    _ => &[],
+                };
+                slots.iter().filter(|s| !s.is_none()).count()
+            },
             self.len(),
         )
-    }
-
-    fn slots(&self) -> &[Node<V>] {
-        match self {
-            Node::Node4(n4) => n4.slots(),
-            Node::Node16(n16) => n16.slots(),
-            Node::Node48(n48) => n48.slots(),
-            Node::Node256(n256) => n256.slots(),
-            _ => &[],
-        }
     }
 
     fn is_full(&self) -> bool {
