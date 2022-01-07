@@ -353,7 +353,7 @@ struct Node256<V> {
 impl<V: std::fmt::Debug> Node256<V> {
     fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
         self.slots.iter().enumerate().filter(|(_, slot)| !slot.is_none())
-            .map(|(i, slot)| (u8::try_from(i).unwrap(), slot))
+            .map(|(c, slot)| (u8::try_from(c).unwrap(), slot))
     }
 
     fn child(&self, byte: u8) -> Option<&Node<V>> {
