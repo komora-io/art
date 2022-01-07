@@ -287,9 +287,9 @@ impl<V> Default for Node48<V> {
 
 impl<V: std::fmt::Debug> Node48<V> {
     fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
-        self.child_index.iter()
-            .filter(|i| **i != 255 && !self.slots[**i as usize].is_none())
-            .map(|i| (*i, &self.slots[*i as usize]))
+        self.child_index.iter().enumerate()
+            .filter(|(_, i)| **i != 255 && !self.slots[**i as usize].is_none())
+            .map(|(c, i)| (u8::try_from(c).unwrap(), &self.slots[*i as usize]))
     }
 
     fn free_slot(&self) -> Option<usize> {
