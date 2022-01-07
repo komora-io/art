@@ -426,7 +426,7 @@ impl<V: std::fmt::Debug> Node<V> {
                 u8::try_from(shared_bytes + 1).unwrap()
             ).unwrap();
 
-        let (_, child) = self.child_mut(old_cursor_new_child_byte, false).unwrap();
+        let (_, child) = self.child_mut(old_cursor_new_child_byte, true, false).unwrap();
         *child = old_cursor;
         child.assert_size();
 
@@ -505,13 +505,15 @@ impl<V: std::fmt::Debug> Node<V> {
         }
     }
 
-    fn child_mut(&mut self, byte: u8, clear_child_index: bool) -> Option<(&mut u16, &mut Node<V>)> {
+    fn child_mut(&mut self, byte: u8, is_add: bool, clear_child_index: bool) -> Option<(&mut u16, &mut Node<V>)> {
         // TODO this is gross
-        if self.child(byte).is_none() && self.is_full() {
-            if clear_child_index {
+        if self.child(byte).is_none() {
+            if !is_add {
                 return None;
             }
-            self.upgrade()
+            if self.is_full() {
+                self.upgrade()
+            }
         }
 
         Some(match self {
@@ -626,7 +628,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 let prefix = &path[..prefix_len];
                 cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
                 cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
-                let (p, child) = cursor.child_mut(path[prefix_len], false).unwrap();
+                let (p, child) = cursor.child_mut(path[prefix_len], is_add, false).unwrap();
                 parent = Some(p);
                 cursor = child;
                 path = &path[prefix_len + 1..];
@@ -636,6 +638,9 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
             let prefix = cursor.prefix();
             let partial_path = &path[..path.len() - 1];
             if !partial_path.starts_with(prefix)  {
+                if !is_add {
+                    return None;
+                }
                 // path compression needs to be reduced
                 // to allow for this key, which does not
                 // share the compressed path.
@@ -650,10 +655,10 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
 
             //println!("cursor is now {:?}", cursor);
             let clear_child_index = !is_add && path.is_empty();
-            let (p, next_cursor) = if let Some(opt) = cursor.child_mut(next_byte, clear_child_index) {
+            let (p, next_cursor) = if let Some(opt) = cursor.child_mut(next_byte, is_add, clear_child_index) {
                 opt
             } else {
-                assert!(clear_child_index);
+                assert!(!is_add);
                 return None;
             };
             cursor = next_cursor;
@@ -775,10 +780,23 @@ fn regression_01() {
     assert_eq!(art.insert([0, 11, 0], 1), None);
     assert_eq!(art.insert([0, 0, 0], 2), Some(0));
 
-    let a = art.iter().map(|(k, v)| v).collect::<Vec<_>>();
-    let m = model.iter().map(|(k, v)| v).collect::<Vec<_>>();
     assert_eq!(art.iter().collect::<Vec<_>>(), vec![
         ([0, 0, 0], &2),
         ([0, 11, 0], &1),
     ]);
+}
+
+#[test]
+fn regression_02() {
+    let mut art = Art::new();
+    art.insert([1, 1, 1], 1);
+    art.remove(&[2, 2, 2]);
+    art.insert([0, 0, 0], 5);
+    assert_eq!(
+        art.iter().collect::<Vec<_>>(),
+        vec![
+            ([0, 0, 0], &5),
+            ([1, 1, 1], &1),
+        ]
+    );
 }
