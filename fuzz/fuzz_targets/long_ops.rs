@@ -4,13 +4,37 @@ extern crate libfuzzer_sys;
 extern crate arbitrary;
 extern crate art;
 
+use std::ops::Range;
+
 use arbitrary::Arbitrary;
+
+#[derive(Debug, Clone)]
+struct B(Range<[u8; 11]>);
+
+impl<'a> Arbitrary<'a> for B {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let start: [u8; 11] = Arbitrary::arbitrary(u)?;
+        let addition: [u8; 11] = Arbitrary::arbitrary(u)?;
+
+        let mut end = [0; 11];
+        for i in 0..11 {
+            end[i] = start[i].saturating_add(addition[i]);
+        }
+
+        Ok(B(Range {
+            start,
+            end,
+        }))
+    }
+}
+
 
 #[derive(Debug, Arbitrary)]
 enum Op {
     Insert([u8; 4], u8),
     Remove([u8; 4]),
     Get([u8; 4]),
+    Range(B),
 }
 
 fn expand(k: [u8; 4]) -> [u8; 11] {
@@ -60,6 +84,11 @@ fuzz_target!(|ops: Vec<Op>| {
             }
             Op::Remove(k) => {
                 assert_eq!(art.remove(&expand(k)), model.remove(&expand(k)));
+            }
+            Op::Range(range) => {
+                let a = art.range(range.0.clone()).map(|(_, v)| v).collect::<Vec<_>>();
+                let m = model.range(range.0).map(|(_, v)| v).collect::<Vec<_>>();
+                assert_eq!(a, m);
             }
         }
     }
