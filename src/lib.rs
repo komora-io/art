@@ -15,6 +15,7 @@ const VALUE_HEADER: Header = Header {
     path: [0; MAX_PREFIX],
 };
 
+#[must_use]
 pub struct Iter<'a, V, const K: usize> {
     root: NodeIter<'a, V>,
     path: Vec<(u8, NodeIter<'a, V>)>,
@@ -843,7 +844,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
 
     pub fn range<'a, R>(&'a self, range: R) -> Iter<'a, V, K>
     where
-        R: 'a + RangeBounds<[u8; K]>,
+        R: RangeBounds<[u8; K]>,
     {
         Iter {
             root: self.root.node_iter(),
