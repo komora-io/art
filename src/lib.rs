@@ -1,4 +1,5 @@
 use std::mem::MaybeUninit;
+use std::ops::{Bound, RangeBounds};
 
 const MAX_PREFIX: usize = 13;
 
@@ -17,6 +18,9 @@ const VALUE_HEADER: Header = Header {
 pub struct Iter<'a, V, const K: usize> {
     root: NodeIter<'a, V>,
     path: Vec<(u8, NodeIter<'a, V>)>,
+    rev_path: Vec<(u8, NodeIter<'a, V>)>,
+    lower_bound: Bound<[u8; K]>,
+    upper_bound: Bound<[u8; K]>,
 }
 
 impl<'a, V: std::fmt::Debug, const K: usize> IntoIterator for &'a Art<V, K> {
@@ -28,6 +32,75 @@ impl<'a, V: std::fmt::Debug, const K: usize> IntoIterator for &'a Art<V, K> {
     }
 }
 
+impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
+    fn char_bound(&self) -> (Bound<u8>, Bound<u8>) {
+        let mut raw_path = [0_u8; K];
+        let mut raw_len = 0_usize;
+
+        let root_prefix = self.root.node.prefix();
+        raw_path[0..root_prefix.len()].copy_from_slice(root_prefix);
+        raw_len += root_prefix.len();
+
+        for (byte, ancestor) in &self.path {
+            raw_path[raw_len] = *byte;
+            raw_len += 1;
+            let prefix = ancestor.node.prefix();
+            raw_path[raw_len..raw_len + prefix.len()].copy_from_slice(prefix);
+            raw_len += prefix.len();
+        }
+
+        let path = &raw_path[..raw_len];
+
+        // included(12345)
+        //   path
+        //      122 => excluded(0)
+        //      123 => included(4)
+        //      124 => excluded(255)
+        // excluded(12345)
+        //   path
+        //      122 => excluded(0)
+        //      123 => excluded(4)
+        //      124 => excluded(255)
+        let lower = match self.lower_bound {
+            Bound::Unbounded => Bound::Unbounded,
+            Bound::Included(lower) => {
+                if lower.starts_with(path) {
+                    Bound::Included(lower[path.len()])
+                } else {
+                    Bound::Excluded(0)
+                }
+            },
+            Bound::Excluded(lower) => {
+                if lower.starts_with(path) {
+                    Bound::Excluded(lower[path.len()])
+                } else {
+                    Bound::Excluded(0)
+                }
+            }
+        };
+
+        let upper = match self.upper_bound {
+            Bound::Unbounded => Bound::Unbounded,
+            Bound::Included(upper) => {
+                if upper.starts_with(path) {
+                    Bound::Included(upper[path.len()])
+                } else {
+                    Bound::Excluded(0)
+                }
+            }
+            Bound::Excluded(upper) => {
+                if upper.starts_with(path) {
+                    Bound::Excluded(upper[path.len()])
+                } else {
+                    Bound::Excluded(0)
+                }
+            }
+        };
+
+        (lower, upper)
+    }
+}
+
 impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
     type Item = ([u8; K], &'a V);
 
@@ -35,20 +108,36 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
         // find next value, populating intermediate
         // iterators until we reach a leaf.
         let (vc, v) = loop {
+            let next_c_bound = self.char_bound();
+
             if self.path.is_empty() {
                 let (c, node) = self.root.children.next()?;
+                if !next_c_bound.contains(&c) {
+                    continue;
+                }
+
                 match node {
                     Node::Value(v) => break (c, v),
                     Node::None => unreachable!(),
-                    other => self.path.push((c, other.node_iter())),
+                    other => {
+                        let iter = other.node_iter();
+                        self.path.push((c, iter))
+                    },
                 }
             }
             match self.path.last_mut().unwrap().1.children.next() {
                 Some((c, node)) => {
+                    let next_c_bound = self.char_bound();
+                    if !next_c_bound.contains(&c) {
+                        continue;
+                    }
                     match node {
                         Node::Value(v) => break (c, v),
                         Node::None => unreachable!(),
-                        other => self.path.push((c, other.node_iter())),
+                        other => {
+                            let iter = other.node_iter();
+                            self.path.push((c, iter))
+                        },
                     }
                 }
                 None => {
@@ -83,9 +172,68 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
     }
 }
 
+impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        // find next value, populating intermediate
+        // iterators until we reach a leaf.
+        let (vc, v) = loop {
+            if self.rev_path.is_empty() {
+                let (c, node) = self.root.children.next_back()?;
+                match node {
+                    Node::Value(v) => break (c, v),
+                    Node::None => unreachable!(),
+                    other => {
+                        let iter = other.node_iter();
+                        self.rev_path.push((c, iter))
+                    },
+                }
+            }
+            match self.rev_path.last_mut().unwrap().1.children.next_back() {
+                Some((c, node)) => {
+                    match node {
+                        Node::Value(v) => break (c, v),
+                        Node::None => unreachable!(),
+                        other => {
+                            let iter = other.node_iter();
+                            self.rev_path.push((c, iter))
+                        },
+                    }
+                }
+                None => {
+                    self.rev_path.pop();
+                    continue;
+                }
+            }
+        };
+
+        let mut k = [0; K];
+        let mut written = 0;
+        let root_prefix = self.root.node.prefix();
+        k[..root_prefix.len()].copy_from_slice(root_prefix);
+        written += root_prefix.len();
+
+        for (c, node_iter) in &self.rev_path {
+            k[written] = *c;
+            written += 1;
+
+            let node_prefix = node_iter.node.prefix();
+
+            k[written..written + node_prefix.len()].copy_from_slice(node_prefix);
+            written += node_prefix.len();
+        }
+
+        k[written] = vc;
+        written += 1;
+
+        assert_eq!(written, K);
+
+        Some((k, v))
+    }
+}
+
 struct NodeIter<'a, V> {
     node: &'a Node<V>,
-    children: Box<dyn 'a + Iterator<Item = (u8, &'a Node<V>)>>,
+    children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -129,7 +277,7 @@ impl<V> Default for Node4<V> {
 }
 
 impl<V: std::fmt::Debug> Node4<V> {
-    fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
+    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         let mut pairs: [(u8, &Node<V>); 4] = [
             (self.keys[0], &self.slots[0]),
             (self.keys[1], &self.slots[1]),
@@ -200,7 +348,7 @@ impl<V> Default for Node16<V> {
 }
 
 impl<V: std::fmt::Debug> Node16<V> {
-    fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
+    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         let mut pairs: [(u8, &Node<V>); 16] = [
             (self.keys[0], &self.slots[0]),
             (self.keys[1], &self.slots[1]),
@@ -286,7 +434,7 @@ impl<V> Default for Node48<V> {
 }
 
 impl<V: std::fmt::Debug> Node48<V> {
-    fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
+    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         self.child_index.iter().enumerate()
             .filter(|(_, i)| **i != 255 && !self.slots[**i as usize].is_none())
             .map(|(c, i)| (u8::try_from(c).unwrap(), &self.slots[*i as usize]))
@@ -351,8 +499,8 @@ struct Node256<V> {
 }
 
 impl<V: std::fmt::Debug> Node256<V> {
-    fn node_iter(&self) -> impl Iterator<Item = (u8, &Node<V>)> {
-        self.slots.iter().enumerate().filter(|(_, slot)| !slot.is_none())
+    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
+        self.slots.iter().enumerate().filter(move |(_, slot)| !slot.is_none())
             .map(|(c, slot)| (u8::try_from(c).unwrap(), slot))
     }
 
@@ -541,11 +689,11 @@ impl<V: std::fmt::Debug> Node<V> {
     }
 
     fn node_iter<'a>(&'a self) -> NodeIter<'a, V> {
-        let children: Box<dyn 'a + Iterator<Item = (u8, &Node<V>)>> = match self {
-            Node::Node4(n4) => Box::new(n4.node_iter()),
-            Node::Node16(n16) => Box::new(n16.node_iter()),
-            Node::Node48(n48) => Box::new(n48.node_iter()),
-            Node::Node256(n256) => Box::new(n256.node_iter()),
+        let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> = match self {
+            Node::Node4(n4) => Box::new(n4.iter()),
+            Node::Node16(n16) => Box::new(n16.iter()),
+            Node::Node48(n48) => Box::new(n48.iter()),
+            Node::Node256(n256) => Box::new(n256.iter()),
 
             // this is only an iterator over nodes, not leaf values
             Node::None => Box::new([].into_iter()),
@@ -620,11 +768,11 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 }
                 // we need to create intermediate nodes before
                 // populating the value for this insert
-                *cursor = Node::Node4(Box::new(Node4::default()));
+                *cursor = Node::Node48(Box::new(Node48::default()));
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
-                let prefix_len = 0; //(path.len() - 1).min(MAX_PREFIX);
+                let prefix_len = (path.len() - 1).min(MAX_PREFIX);
                 let prefix = &path[..prefix_len];
                 cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
                 cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
@@ -690,11 +838,28 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
     }
 
     pub fn iter(&self) -> Iter<'_, V, K> {
+        self.range(..)
+    }
 
+    pub fn range<'a, R>(&'a self, range: R) -> Iter<'a, V, K>
+    where
+        R: 'a + RangeBounds<[u8; K]>,
+    {
         Iter {
             root: self.root.node_iter(),
             path: vec![],
+            rev_path: vec![],
+            lower_bound: map_bound(range.start_bound(), |b| *b),
+            upper_bound: map_bound(range.end_bound(), |b| *b),
         }
+    }
+}
+
+fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
+    match bound {
+        Bound::Unbounded => Bound::Unbounded,
+        Bound::Included(x) => Bound::Included(f(x)),
+        Bound::Excluded(x) => Bound::Excluded(f(x)),
     }
 }
 
