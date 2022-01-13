@@ -109,10 +109,9 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
         // find next value, populating intermediate
         // iterators until we reach a leaf.
         let (vc, v) = loop {
-            let next_c_bound = self.char_bound();
-
             if self.path.is_empty() {
                 let (c, node) = self.root.children.next()?;
+                let next_c_bound = self.char_bound();
                 if !next_c_bound.contains(&c) {
                     continue;
                 }
@@ -180,6 +179,11 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
         let (vc, v) = loop {
             if self.rev_path.is_empty() {
                 let (c, node) = self.root.children.next_back()?;
+                let next_c_bound = self.char_bound();
+                if !next_c_bound.contains(&c) {
+                    continue;
+                }
+
                 match node {
                     Node::Value(v) => break (c, v),
                     Node::None => unreachable!(),
@@ -191,6 +195,11 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
             }
             match self.rev_path.last_mut().unwrap().1.children.next_back() {
                 Some((c, node)) => {
+                    let next_c_bound = self.char_bound();
+                    if !next_c_bound.contains(&c) {
+                        continue;
+                    }
+
                     match node {
                         Node::Value(v) => break (c, v),
                         Node::None => unreachable!(),

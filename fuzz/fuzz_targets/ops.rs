@@ -28,7 +28,7 @@ enum Op {
     Insert(u8, u8),
     Remove(u8),
     Get(u8),
-    Range(B),
+    Range(B, bool),
     Len,
 }
 
@@ -56,10 +56,16 @@ fuzz_target!(|ops: Vec<Op>| {
             Op::Len => {
                 assert_eq!(art.len(), model.len());
             }
-            Op::Range(range) => {
-                let a = art.range(range.0.clone()).map(|(_, v)| v).collect::<Vec<_>>();
-                let m = model.range(range.0).map(|(_, v)| v).collect::<Vec<_>>();
-                assert_eq!(a, m);
+            Op::Range(range, forward) => {
+                if forward {
+                    let a = art.range(range.0.clone()).map(|(_, v)| v).collect::<Vec<_>>();
+                    let m = model.range(range.0).map(|(_, v)| v).collect::<Vec<_>>();
+                    assert_eq!(a, m);
+                } else {
+                    let a = art.range(range.0.clone()).map(|(_, v)| v).rev().collect::<Vec<_>>();
+                    let m = model.range(range.0).map(|(_, v)| v).rev().collect::<Vec<_>>();
+                    assert_eq!(a, m);
+                }
             }
         };
 
