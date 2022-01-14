@@ -81,7 +81,11 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
             },
             Bound::Excluded(lower) => {
                 if lower.starts_with(path) {
-                    Bound::Excluded(lower[path.len()])
+                    if path.len() + 1 == K {
+                        Bound::Excluded(lower[path.len()])
+                    } else {
+                        Bound::Included(lower[path.len()])
+                    }
                 } else if &lower[..path.len()] < path {
                     Bound::Unbounded
                 } else {
@@ -103,7 +107,11 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
             }
             Bound::Excluded(upper) => {
                 if upper.starts_with(path) {
-                    Bound::Excluded(upper[path.len()])
+                    if path.len() + 1 == K {
+                        Bound::Excluded(upper[path.len()])
+                    } else {
+                        Bound::Included(upper[path.len()])
+                    }
                 } else if &upper[..path.len()] > path {
                     Bound::Unbounded
                 } else {
