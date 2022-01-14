@@ -67,15 +67,19 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
             Bound::Included(lower) => {
                 if lower.starts_with(path) {
                     Bound::Included(lower[path.len()])
+                } else if &lower[..path.len()] < path {
+                    Bound::Unbounded
                 } else {
-                    Bound::Excluded(0)
+                    Bound::Excluded(255)
                 }
             },
             Bound::Excluded(lower) => {
                 if lower.starts_with(path) {
                     Bound::Excluded(lower[path.len()])
+                } else if &lower[..path.len()] < path {
+                    Bound::Unbounded
                 } else {
-                    Bound::Excluded(0)
+                    Bound::Excluded(255)
                 }
             }
         };
@@ -85,6 +89,8 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
             Bound::Included(upper) => {
                 if upper.starts_with(path) {
                     Bound::Included(upper[path.len()])
+                } else if &upper[..path.len()] > path {
+                    Bound::Unbounded
                 } else {
                     Bound::Excluded(0)
                 }
@@ -92,6 +98,8 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
             Bound::Excluded(upper) => {
                 if upper.starts_with(path) {
                     Bound::Excluded(upper[path.len()])
+                } else if &upper[..path.len()] > path {
+                    Bound::Unbounded
                 } else {
                     Bound::Excluded(0)
                 }
@@ -109,7 +117,26 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
         // find next value, populating intermediate
         // iterators until we reach a leaf.
         let (vc, v) = loop {
-            if self.path.is_empty() {
+            if let Some((_c, last)) = self.path.last_mut() {
+                let child_opt = last.children.next();
+                if child_opt.is_none() {
+                    self.path.pop();
+                    continue;
+                }
+                let (c, node) = child_opt.unwrap();
+                let next_c_bound = self.char_bound();
+                if !next_c_bound.contains(&c) {
+                    continue;
+                }
+                match node {
+                    Node::Value(v) => break (c, v),
+                    Node::None => unreachable!(),
+                    other => {
+                        let iter = other.node_iter();
+                        self.path.push((c, iter))
+                    },
+                }
+            } else {
                 let (c, node) = self.root.children.next()?;
                 let next_c_bound = self.char_bound();
                 if !next_c_bound.contains(&c) {
@@ -123,26 +150,6 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
                         let iter = other.node_iter();
                         self.path.push((c, iter))
                     },
-                }
-            }
-            match self.path.last_mut().unwrap().1.children.next() {
-                Some((c, node)) => {
-                    let next_c_bound = self.char_bound();
-                    if !next_c_bound.contains(&c) {
-                        continue;
-                    }
-                    match node {
-                        Node::Value(v) => break (c, v),
-                        Node::None => unreachable!(),
-                        other => {
-                            let iter = other.node_iter();
-                            self.path.push((c, iter))
-                        },
-                    }
-                }
-                None => {
-                    self.path.pop();
-                    continue;
                 }
             }
         };
