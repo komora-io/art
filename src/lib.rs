@@ -34,15 +34,21 @@ impl<'a, V: std::fmt::Debug, const K: usize> IntoIterator for &'a Art<V, K> {
 }
 
 impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
-    fn char_bound(&self) -> (Bound<u8>, Bound<u8>) {
+    fn char_bound(&self, is_forward: bool) -> (Bound<u8>, Bound<u8>) {
         let mut raw_path = [0_u8; K];
         let mut raw_len = 0_usize;
+
+        let node_path = if is_forward {
+            &self.path
+        } else {
+            &self.rev_path
+        };
 
         let root_prefix = self.root.node.prefix();
         raw_path[0..root_prefix.len()].copy_from_slice(root_prefix);
         raw_len += root_prefix.len();
 
-        for (byte, ancestor) in &self.path {
+        for (byte, ancestor) in node_path {
             raw_path[raw_len] = *byte;
             raw_len += 1;
             let prefix = ancestor.node.prefix();
@@ -124,7 +130,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
                     continue;
                 }
                 let (c, node) = child_opt.unwrap();
-                let next_c_bound = self.char_bound();
+                let next_c_bound = self.char_bound(true);
                 if !next_c_bound.contains(&c) {
                     continue;
                 }
@@ -138,7 +144,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
                 }
             } else {
                 let (c, node) = self.root.children.next()?;
-                let next_c_bound = self.char_bound();
+                let next_c_bound = self.char_bound(true);
                 if !next_c_bound.contains(&c) {
                     continue;
                 }
@@ -191,7 +197,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
                     continue;
                 }
                 let (c, node) = child_opt.unwrap();
-                let next_c_bound = self.char_bound();
+                let next_c_bound = self.char_bound(false);
                 if !next_c_bound.contains(&c) {
                     continue;
                 }
@@ -206,7 +212,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
                 }
             } else {
                 let (c, node) = self.root.children.next_back()?;
-                let next_c_bound = self.char_bound();
+                let next_c_bound = self.char_bound(false);
                 if !next_c_bound.contains(&c) {
                     continue;
                 }
