@@ -187,7 +187,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
             if let Some((_c, last)) = self.rev_path.last_mut() {
                 let child_opt = last.children.next_back();
                 if child_opt.is_none() {
-                    self.path.pop();
+                    self.rev_path.pop();
                     continue;
                 }
                 let (c, node) = child_opt.unwrap();
