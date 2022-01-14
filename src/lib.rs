@@ -184,8 +184,13 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
         // find next value, populating intermediate
         // iterators until we reach a leaf.
         let (vc, v) = loop {
-            if self.rev_path.is_empty() {
-                let (c, node) = self.root.children.next_back()?;
+            if let Some((_c, last)) = self.rev_path.last_mut() {
+                let child_opt = last.children.next_back();
+                if child_opt.is_none() {
+                    self.path.pop();
+                    continue;
+                }
+                let (c, node) = child_opt.unwrap();
                 let next_c_bound = self.char_bound();
                 if !next_c_bound.contains(&c) {
                     continue;
@@ -199,26 +204,20 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
                         self.rev_path.push((c, iter))
                     },
                 }
-            }
-            match self.rev_path.last_mut().unwrap().1.children.next_back() {
-                Some((c, node)) => {
-                    let next_c_bound = self.char_bound();
-                    if !next_c_bound.contains(&c) {
-                        continue;
-                    }
-
-                    match node {
-                        Node::Value(v) => break (c, v),
-                        Node::None => unreachable!(),
-                        other => {
-                            let iter = other.node_iter();
-                            self.rev_path.push((c, iter))
-                        },
-                    }
-                }
-                None => {
-                    self.rev_path.pop();
+            } else {
+                let (c, node) = self.root.children.next_back()?;
+                let next_c_bound = self.char_bound();
+                if !next_c_bound.contains(&c) {
                     continue;
+                }
+
+                match node {
+                    Node::Value(v) => break (c, v),
+                    Node::None => unreachable!(),
+                    other => {
+                        let iter = other.node_iter();
+                        self.rev_path.push((c, iter))
+                    },
                 }
             }
         };
