@@ -58,12 +58,23 @@ fuzz_target!(|ops: Vec<Op>| {
             }
             Op::Range(range, forward) => {
                 if forward {
-                    let a = art.range(range.0.clone()).map(|(_, v)| v).collect::<Vec<_>>();
+                    let a = art
+                        .range(range.0.clone())
+                        .map(|(_, v)| v)
+                        .collect::<Vec<_>>();
                     let m = model.range(range.0).map(|(_, v)| v).collect::<Vec<_>>();
                     assert_eq!(a, m);
                 } else {
-                    let a = art.range(range.0.clone()).map(|(_, v)| v).rev().collect::<Vec<_>>();
-                    let m = model.range(range.0).map(|(_, v)| v).rev().collect::<Vec<_>>();
+                    let a = art
+                        .range(range.0.clone())
+                        .map(|(_, v)| v)
+                        .rev()
+                        .collect::<Vec<_>>();
+                    let m = model
+                        .range(range.0)
+                        .map(|(_, v)| v)
+                        .rev()
+                        .collect::<Vec<_>>();
                     assert_eq!(a, m);
                 }
             }
@@ -78,5 +89,5 @@ fuzz_target!(|ops: Vec<Op>| {
         let ab = art.iter().rev().map(|(_, v)| v).collect::<Vec<_>>();
         m.reverse();
         assert_eq!(ab, m);
-    };
+    }
 });

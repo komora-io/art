@@ -1,5 +1,4 @@
 fn main() {
-
     const N: u64 = 100_000_000;
 
     let mut art = art::Art::new();
@@ -20,7 +19,7 @@ fn main() {
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
         assert_eq!(art.get(&k.to_be_bytes()), Some(&[0_u8]));
-        if (k + 1) % (N / 10)== 0 {
+        if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps",
                 k as f64 / (before_reads.elapsed().as_micros() + 1) as f64,
@@ -31,14 +30,14 @@ fn main() {
 
     drop(art);
 
-    /*
+    println!("now doing btreemap");
     let mut btree = std::collections::BTreeMap::new();
 
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
         //println!("{}", k);
         assert!(btree.insert(k.to_be_bytes(), [0_u8]).is_none());
-        if (k + 1) % (N / 10)== 0 {
+        if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million wps",
                 k as f64 / (before_writes.elapsed().as_micros() + 1) as f64,
@@ -50,7 +49,7 @@ fn main() {
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
         assert_eq!(btree.get(&k.to_be_bytes()), Some(&[0_u8]));
-        if (k + 1) % (N / 10)== 0 {
+        if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps",
                 k as f64 / (before_reads.elapsed().as_micros() + 1) as f64,
@@ -58,5 +57,32 @@ fn main() {
         }
     }
     dbg!(before_reads.elapsed());
-    */
+
+    println!("now doing hashmap");
+    let mut hash = std::collections::HashMap::new();
+
+    let before_writes = std::time::Instant::now();
+    for k in 0_u64..N {
+        //println!("{}", k);
+        assert!(hash.insert(k.to_be_bytes(), [0_u8]).is_none());
+        if (k + 1) % (N / 10) == 0 {
+            println!(
+                "{:.2} million wps",
+                k as f64 / (before_writes.elapsed().as_micros() + 1) as f64,
+            )
+        }
+    }
+    dbg!(before_writes.elapsed());
+
+    let before_reads = std::time::Instant::now();
+    for k in 0_u64..N {
+        assert_eq!(hash.get(&k.to_be_bytes()), Some(&[0_u8]));
+        if (k + 1) % (N / 10) == 0 {
+            println!(
+                "{:.2} million rps",
+                k as f64 / (before_reads.elapsed().as_micros() + 1) as f64,
+            )
+        }
+    }
+    dbg!(before_reads.elapsed());
 }

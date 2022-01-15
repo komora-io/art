@@ -69,16 +69,20 @@ fuzz_target!(|ops: Vec<Op>| {
                 for i in 0..4 {
                     end[i] = start[i].saturating_add(diff[i]);
                 }
-                 let range = Range {
-                     start: expand(start),
-                     end: expand(end),
-                 };
-                 if forward {
+                let range = Range {
+                    start: expand(start),
+                    end: expand(end),
+                };
+                if forward {
                     let a = art.range(range.clone()).map(|(_, v)| v).collect::<Vec<_>>();
                     let m = model.range(range).map(|(_, v)| v).collect::<Vec<_>>();
                     assert_eq!(a, m);
                 } else {
-                    let a = art.range(range.clone()).map(|(_, v)| v).rev().collect::<Vec<_>>();
+                    let a = art
+                        .range(range.clone())
+                        .map(|(_, v)| v)
+                        .rev()
+                        .collect::<Vec<_>>();
                     let m = model.range(range).map(|(_, v)| v).rev().collect::<Vec<_>>();
                     assert_eq!(a, m);
                 }

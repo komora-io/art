@@ -78,7 +78,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
                 } else {
                     Bound::Excluded(255)
                 }
-            },
+            }
             Bound::Excluded(lower) => {
                 if lower.starts_with(path) {
                     if path.len() + 1 == K {
@@ -148,7 +148,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
                     other => {
                         let iter = other.node_iter();
                         self.path.push((c, iter))
-                    },
+                    }
                 }
             } else {
                 let (c, node) = self.root.children.next()?;
@@ -163,7 +163,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
                     other => {
                         let iter = other.node_iter();
                         self.path.push((c, iter))
-                    },
+                    }
                 }
             }
         };
@@ -216,7 +216,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
                     other => {
                         let iter = other.node_iter();
                         self.rev_path.push((c, iter))
-                    },
+                    }
                 }
             } else {
                 let (c, node) = self.root.children.next_back()?;
@@ -231,7 +231,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V,
                     other => {
                         let iter = other.node_iter();
                         self.rev_path.push((c, iter))
-                    },
+                    }
                 }
             }
         };
@@ -465,7 +465,9 @@ impl<V> Default for Node48<V> {
 
 impl<V: std::fmt::Debug> Node48<V> {
     fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
-        self.child_index.iter().enumerate()
+        self.child_index
+            .iter()
+            .enumerate()
             .filter(|(_, i)| **i != 255 && !self.slots[**i as usize].is_none())
             .map(|(c, i)| (u8::try_from(c).unwrap(), &self.slots[*i as usize]))
     }
@@ -530,7 +532,10 @@ struct Node256<V> {
 
 impl<V: std::fmt::Debug> Node256<V> {
     fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
-        self.slots.iter().enumerate().filter(move |(_, slot)| !slot.is_none())
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(move |(_, slot)| !slot.is_none())
             .map(|(c, slot)| (u8::try_from(c).unwrap(), slot))
     }
 
@@ -565,7 +570,10 @@ pub struct Art<V, const K: usize> {
 
 impl<V, const K: usize> Default for Art<V, K> {
     fn default() -> Art<V, K> {
-        Art { len: 0, root: Node::None }
+        Art {
+            len: 0,
+            root: Node::None,
+        }
     }
 }
 
@@ -599,12 +607,14 @@ impl<V: std::fmt::Debug> Node<V> {
         // we add +1 because we must account for the extra byte
         // reduced from the node's fan-out itself.
         old_cursor_header.path.rotate_left(shared_bytes + 1);
-        old_cursor_header.path_len =
-            old_cursor_header.path_len.checked_sub(
-                u8::try_from(shared_bytes + 1).unwrap()
-            ).unwrap();
+        old_cursor_header.path_len = old_cursor_header
+            .path_len
+            .checked_sub(u8::try_from(shared_bytes + 1).unwrap())
+            .unwrap();
 
-        let (_, child) = self.child_mut(old_cursor_new_child_byte, true, false).unwrap();
+        let (_, child) = self
+            .child_mut(old_cursor_new_child_byte, true, false)
+            .unwrap();
         *child = old_cursor;
         child.assert_size();
 
@@ -683,7 +693,12 @@ impl<V: std::fmt::Debug> Node<V> {
         }
     }
 
-    fn child_mut(&mut self, byte: u8, is_add: bool, clear_child_index: bool) -> Option<(&mut u16, &mut Node<V>)> {
+    fn child_mut(
+        &mut self,
+        byte: u8,
+        is_add: bool,
+        clear_child_index: bool,
+    ) -> Option<(&mut u16, &mut Node<V>)> {
         // TODO this is gross
         if self.child(byte).is_none() {
             if !is_add {
@@ -732,7 +747,7 @@ impl<V: std::fmt::Debug> Node<V> {
 
         NodeIter {
             node: self,
-            children
+            children,
         }
     }
 }
@@ -775,15 +790,17 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 self.len -= 1;
                 Some(*old)
             }
-            Node::None => {
-                None
-            }
+            Node::None => None,
             _ => unreachable!(),
         }
     }
 
     // returns the optional parent node for child maintenance, and the value node
-    fn slot_for_key(&mut self, key: &[u8; K], is_add: bool) -> Option<(Option<&mut u16>, &mut Node<V>)> {
+    fn slot_for_key(
+        &mut self,
+        key: &[u8; K],
+        is_add: bool,
+    ) -> Option<(Option<&mut u16>, &mut Node<V>)> {
         let mut parent: Option<&mut u16> = None;
         let mut path: &[u8] = &key[..];
         let mut cursor: &mut Node<V> = &mut self.root;
@@ -815,7 +832,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
 
             let prefix = cursor.prefix();
             let partial_path = &path[..path.len() - 1];
-            if !partial_path.starts_with(prefix)  {
+            if !partial_path.starts_with(prefix) {
                 if !is_add {
                     return None;
                 }
@@ -833,12 +850,13 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
 
             //println!("cursor is now {:?}", cursor);
             let clear_child_index = !is_add && path.is_empty();
-            let (p, next_cursor) = if let Some(opt) = cursor.child_mut(next_byte, is_add, clear_child_index) {
-                opt
-            } else {
-                assert!(!is_add);
-                return None;
-            };
+            let (p, next_cursor) =
+                if let Some(opt) = cursor.child_mut(next_byte, is_add, clear_child_index) {
+                    opt
+                } else {
+                    assert!(!is_add);
+                    return None;
+                };
             cursor = next_cursor;
             parent = Some(p);
         }
@@ -939,28 +957,28 @@ fn regression_00() {
     art.insert([253], 37);
     assert_eq!(art.len(), 7);
 
-    art.insert([10], 0,);
-    art.insert([38], 28,);
-    art.insert([24], 28,);
+    art.insert([10], 0);
+    art.insert([38], 28);
+    art.insert([24], 28);
     assert_eq!(art.len(), 10);
 
-    art.insert([28], 30,);
-    art.insert([30], 30,);
-    art.insert([28], 15,);
-    art.insert([51], 48,);
-    art.insert([53], 255,);
-    art.insert([59], 58,);
-    art.insert([58], 58,);
+    art.insert([28], 30);
+    art.insert([30], 30);
+    art.insert([28], 15);
+    art.insert([51], 48);
+    art.insert([53], 255);
+    art.insert([59], 58);
+    art.insert([58], 58);
     assert_eq!(art.len(), 16);
     assert_eq!(art.remove(&[85]), None);
     assert_eq!(art.len(), 16);
-    art.insert([30], 30,);
-    art.insert([30], 0,);
-    art.insert([30], 0,);
+    art.insert([30], 30);
+    art.insert([30], 0);
+    art.insert([30], 0);
     assert_eq!(art.len(), 16);
-    art.insert([143], 254,);
+    art.insert([143], 254);
     assert_eq!(art.len(), 17);
-    art.insert([30], 30,);
+    art.insert([30], 30);
     assert_eq!(art.len(), 17);
     assert_eq!(art.len(), 17);
     assert_eq!(art.remove(&[85]), None);
@@ -975,10 +993,10 @@ fn regression_01() {
     assert_eq!(art.insert([0, 11, 0], 1), None);
     assert_eq!(art.insert([0, 0, 0], 2), Some(0));
 
-    assert_eq!(art.iter().collect::<Vec<_>>(), vec![
-        ([0, 0, 0], &2),
-        ([0, 11, 0], &1),
-    ]);
+    assert_eq!(
+        art.iter().collect::<Vec<_>>(),
+        vec![([0, 0, 0], &2), ([0, 11, 0], &1),]
+    );
 }
 
 #[test]
@@ -989,9 +1007,6 @@ fn regression_02() {
     art.insert([0, 0, 0], 5);
     assert_eq!(
         art.iter().collect::<Vec<_>>(),
-        vec![
-            ([0, 0, 0], &5),
-            ([1, 1, 1], &1),
-        ]
+        vec![([0, 0, 0], &5), ([1, 1, 1], &1),]
     );
 }

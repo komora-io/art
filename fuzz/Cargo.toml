@@ -29,3 +29,7 @@ path = "fuzz_targets/ops.rs"
 [[bin]]
 name = "long_ops"
 path = "fuzz_targets/long_ops.rs"
+
+[[bin]]
+name = "ops_64"
+path = "fuzz_targets/ops_64.rs"
