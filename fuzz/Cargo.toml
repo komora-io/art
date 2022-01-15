@@ -23,12 +23,16 @@ features = ["arbitrary-derive"]
 members = ["."]
 
 [[bin]]
-name = "ops"
-path = "fuzz_targets/ops.rs"
+name = "ops_0"
+path = "fuzz_targets/ops_0.rs"
 
 [[bin]]
-name = "long_ops"
-path = "fuzz_targets/long_ops.rs"
+name = "ops_1"
+path = "fuzz_targets/ops_1.rs"
+
+[[bin]]
+name = "ops_11"
+path = "fuzz_targets/ops_11.rs"
 
 [[bin]]
 name = "ops_64"

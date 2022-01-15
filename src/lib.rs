@@ -1,18 +1,18 @@
 use std::mem::MaybeUninit;
 use std::ops::{Bound, RangeBounds};
 
-const MAX_PREFIX: usize = 13;
+const MAX_PATH_COMPRESSION_BYTES: usize = 13;
 
 const NONE_HEADER: Header = Header {
     children: 0,
     path_len: 0,
-    path: [0; MAX_PREFIX],
+    path: [0; MAX_PATH_COMPRESSION_BYTES],
 };
 
 const VALUE_HEADER: Header = Header {
     children: 1,
     path_len: 0,
-    path: [0; MAX_PREFIX],
+    path: [0; MAX_PATH_COMPRESSION_BYTES],
 };
 
 #[must_use]
@@ -269,10 +269,11 @@ struct NodeIter<'a, V> {
 #[derive(Debug, Default, Clone, Copy)]
 struct Header {
     children: u16,
-    path: [u8; MAX_PREFIX],
+    path: [u8; MAX_PATH_COMPRESSION_BYTES],
     path_len: u8,
 }
 
+// TODO remove box, use tagged pointer + repr(align(8))
 #[derive(Debug, Clone)]
 enum Node<V> {
     None,
@@ -819,7 +820,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
-                let prefix_len = (path.len() - 1).min(MAX_PREFIX);
+                let prefix_len = (path.len() - 1).min(MAX_PATH_COMPRESSION_BYTES);
                 let prefix = &path[..prefix_len];
                 cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
                 cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
