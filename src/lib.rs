@@ -1012,3 +1012,52 @@ fn regression_02() {
         vec![([0, 0, 0], &5), ([1, 1, 1], &1),]
     );
 }
+
+#[test]
+fn regression_03() {
+    fn expand(k: [u8; 4]) -> [u8; 11] {
+        let mut ret = [0; 11];
+
+        ret[0] = k[0];
+        ret[5] = k[2];
+        ret[10] = k[3];
+
+        let mut b = k[1];
+        // byte at index 0 is k[0]
+        for i in 1..5 {
+            if b.leading_zeros() == 0 {
+                ret[i] = 255;
+            }
+            b = b.rotate_left(1);
+        }
+        // byte at index 5 is k[2]
+        for i in 6..10 {
+            if b.leading_zeros() == 0 {
+                ret[i] = 255;
+            }
+            b = b.rotate_left(1);
+        }
+        // byte at index 10 is k[3]
+
+        ret
+    }
+
+    let mut art = Art::new();
+    art.insert(expand([1, 173, 33, 255]), 255);
+    art.insert(expand([255, 20, 255, 223]), 223);
+
+    let start = expand([223, 223, 223, 223]);
+    let end = expand([255, 255, 255, 255]);
+    let v = art.range(start..end).count();
+    assert_eq!(v, 1);
+}
+
+#[test]
+fn regression_04() {
+    let mut art = Art::new();
+    art.insert([], 0);
+
+    assert_eq!(art.get(&[]), Some(&0));
+
+    assert_eq!(art.iter().count(), 1);
+}
