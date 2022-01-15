@@ -4,22 +4,59 @@ extern crate libfuzzer_sys;
 extern crate arbitrary;
 extern crate art;
 
-use std::ops::Range;
+use std::ops::{RangeBounds, Bound};
 
 use arbitrary::Arbitrary;
 
-#[derive(Debug, Clone)]
-struct B(Range<[u8; 1]>);
+#[derive(Debug, Clone, Copy)]
+struct B {
+    start: Bound<[u8; 1]>,
+    end: Bound<[u8; 1]>,
+}
+
+impl RangeBounds<[u8; 1]> for B {
+    fn start_bound(&self) -> Bound<&[u8; 1]> {
+        ref_bound(&self.start)
+    }
+
+    fn end_bound(&self) -> Bound<&[u8; 1]> {
+        ref_bound(&self.end)
+    }
+}
+
+fn ref_bound<T>(bound: &Bound<T>) -> Bound<&T> {
+    match bound {
+        Bound::Unbounded => Bound::Unbounded,
+        Bound::Included(x) => Bound::Included(&x),
+        Bound::Excluded(x) => Bound::Excluded(&x),
+    }
+}
 
 impl<'a> Arbitrary<'a> for B {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let first: u8 = Arbitrary::arbitrary(u)?;
-        let addition: u8 = Arbitrary::arbitrary(u)?;
+        let information: u8 = Arbitrary::arbitrary(u)?;
 
-        Ok(B(Range {
-            start: [first],
-            end: [first.saturating_add(addition)],
-        }))
+        let a: [u8; 1] = Arbitrary::arbitrary(u)?;
+        let add: u8 = Arbitrary::arbitrary(u)?;
+        let b: [u8; 1] = [a[0].saturating_add(add)];
+
+        let (start, end) = match information % 8 {
+            0 => (Bound::Included(a), Bound::Included(b)),
+            1 => (Bound::Included(a), Bound::Excluded(b)),
+            2 => (Bound::Included(a), Bound::Unbounded),
+            3 => (Bound::Excluded(a), Bound::Included(b)),
+            // Excluded..Excluded is skipped because it's not valid
+            4 => (Bound::Excluded(a), Bound::Unbounded),
+            5 => (Bound::Unbounded, Bound::Included(b)),
+            6 => (Bound::Unbounded, Bound::Excluded(b)),
+            7 => (Bound::Unbounded, Bound::Unbounded),
+            _ => unreachable!(),
+        };
+
+        Ok(B {
+            start,
+            end,
+        })
     }
 }
 
@@ -59,19 +96,19 @@ fuzz_target!(|ops: Vec<Op>| {
             Op::Range(range, forward) => {
                 if forward {
                     let a = art
-                        .range(range.0.clone())
+                        .range(range)
                         .map(|(_, v)| v)
                         .collect::<Vec<_>>();
-                    let m = model.range(range.0).map(|(_, v)| v).collect::<Vec<_>>();
+                    let m = model.range(range).map(|(_, v)| v).collect::<Vec<_>>();
                     assert_eq!(a, m);
                 } else {
                     let a = art
-                        .range(range.0.clone())
+                        .range(range)
                         .map(|(_, v)| v)
                         .rev()
                         .collect::<Vec<_>>();
                     let m = model
-                        .range(range.0)
+                        .range(range)
                         .map(|(_, v)| v)
                         .rev()
                         .collect::<Vec<_>>();
