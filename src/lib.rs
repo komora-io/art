@@ -869,20 +869,21 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
         let mut k: &[u8] = &*key;
         let mut cursor: &Node<V> = &self.root;
 
-        loop {
+        while !k.is_empty() {
             let prefix = cursor.prefix();
-            if !k.starts_with(prefix) || k.len() <= prefix.len() {
+
+            if !k.starts_with(prefix) {
                 return None;
             }
 
-            let child = cursor.child(k[prefix.len()])?;
+            cursor = cursor.child(k[prefix.len()])?;
             k = &k[prefix.len() + 1..];
+        }
 
-            match child {
-                &Node::Value(ref v) => return Some(v),
-                &Node::None => return None,
-                _ => cursor = child,
-            }
+        match cursor {
+            &Node::Value(ref v) => return Some(v),
+            &Node::None => return None,
+            _ => unreachable!(),
         }
     }
 
