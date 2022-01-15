@@ -22,6 +22,7 @@ pub struct Iter<'a, V, const K: usize> {
     rev_path: Vec<(u8, NodeIter<'a, V>)>,
     lower_bound: Bound<[u8; K]>,
     upper_bound: Bound<[u8; K]>,
+    finished_0: bool,
 }
 
 impl<'a, V: std::fmt::Debug, const K: usize> IntoIterator for &'a Art<V, K> {
@@ -128,6 +129,19 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
     type Item = ([u8; K], &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
+        if K == 0 {
+            let k: [u8; K] = [0; K];
+            let in_bounds = (self.lower_bound, self.upper_bound).contains(&k);
+            let finished = self.finished_0;
+            let can_return = in_bounds && !finished;
+            self.finished_0 = true;
+            match self.root.node {
+                &Node::Value(ref v) if can_return => return Some(([0; K], v)),
+                &Node::Value(_) | &Node::None => return None,
+                _ => unreachable!(),
+            }
+        }
+
         // find next value, populating intermediate
         // iterators until we reach a leaf.
         let (vc, v) = loop {
@@ -195,6 +209,19 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
 
 impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
     fn next_back(&mut self) -> Option<Self::Item> {
+        if K == 0 {
+            let k: [u8; K] = [0; K];
+            let in_bounds = (self.lower_bound, self.upper_bound).contains(&k);
+            let finished = self.finished_0;
+            let can_return = in_bounds && !finished;
+            self.finished_0 = true;
+            match self.root.node {
+                &Node::Value(ref v) if can_return => return Some(([0; K], v)),
+                &Node::Value(_) | &Node::None => return None,
+                _ => unreachable!(),
+            }
+        }
+
         // find next value, populating intermediate
         // iterators until we reach a leaf.
         let (vc, v) = loop {
@@ -901,6 +928,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
             rev_path: vec![],
             lower_bound: map_bound(range.start_bound(), |b| *b),
             upper_bound: map_bound(range.end_bound(), |b| *b),
+            finished_0: false,
         }
     }
 }
@@ -915,7 +943,6 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
 
 #[test]
 fn test_inserts() {
-    /*
     let mut art = Art::new();
     assert_eq!(art.insert([], "v1"), None);
     assert_eq!(art.insert([], "v2"), Some("v1"));
@@ -928,18 +955,15 @@ fn test_inserts() {
     assert_eq!(art.insert([10], "k 1 v 2"), Some("k 1 v 1"));
     assert_eq!(art.insert([0], "k 0 v 3"), Some("k 0 v 2"));
     assert_eq!(art.insert([10], "k 1 v 3"), Some("k 1 v 2"));
-    */
 
     let mut art: Art<&str, 2> = Art::new();
     assert_eq!(art.get(&[255, 255]), None);
-    /*
     assert_eq!(art.insert([20, 20], "k 0 v 1"), None);
     assert_eq!(art.insert([20, 192], "k 1 v 1"), None);
     assert_eq!(art.insert([20, 20], "k 0 v 2"), Some("k 0 v 1"));
     assert_eq!(art.insert([20, 192], "k 1 v 2"), Some("k 1 v 1"));
     assert_eq!(art.insert([20, 20], "k 0 v 3"), Some("k 0 v 2"));
     assert_eq!(art.insert([20, 192], "k 1 v 3"), Some("k 1 v 2"));
-    */
 }
 
 #[test]
@@ -1055,9 +1079,14 @@ fn regression_03() {
 #[test]
 fn regression_04() {
     let mut art = Art::new();
+
     art.insert([], 0);
 
     assert_eq!(art.get(&[]), Some(&0));
+    assert_eq!(art.remove(&[]), Some(0));
+    assert_eq!(art.get(&[]), None);
+
+    art.insert([], 3);
 
     assert_eq!(art.iter().count(), 1);
 }

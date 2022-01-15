@@ -37,16 +37,16 @@ impl<'a> Arbitrary<'a> for B {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let information: u8 = Arbitrary::arbitrary(u)?;
 
-        let (start, end) = match information % 9 {
+        let (start, end) = match information % 8 {
             0 => (Bound::Included([]), Bound::Included([])),
             1 => (Bound::Included([]), Bound::Excluded([])),
             2 => (Bound::Included([]), Bound::Unbounded),
             3 => (Bound::Excluded([]), Bound::Included([])),
-            4 => (Bound::Excluded([]), Bound::Excluded([])),
-            5 => (Bound::Excluded([]), Bound::Unbounded),
-            6 => (Bound::Unbounded, Bound::Included([])),
-            7 => (Bound::Unbounded, Bound::Excluded([])),
-            8 => (Bound::Unbounded, Bound::Unbounded),
+            // Excluded..Excluded is skipped because it's not valid
+            4 => (Bound::Excluded([]), Bound::Unbounded),
+            5 => (Bound::Unbounded, Bound::Included([])),
+            6 => (Bound::Unbounded, Bound::Excluded([])),
+            7 => (Bound::Unbounded, Bound::Unbounded),
             _ => unreachable!(),
         };
 
