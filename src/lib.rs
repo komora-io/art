@@ -968,16 +968,19 @@ impl<V, const K: usize> Art<V, K> {
                 let byte = k[prefix.len()];
                 k = &k[prefix.len() + 1..];
 
-                let child_mut = cursor.child_mut(byte, false, false)
-                    .expect("prune should only be called on \
-                            freshly removed keys with a full \
-                            ancestor chain still in-place.");
+                let child_mut = cursor.child_mut(byte, false, false).expect(
+                    "prune should only be called on \
+                    freshly removed keys with a full \
+                    ancestor chain still in-place."
+                );
+
                 parent = Some(child_mut.0);
                 cursor = child_mut.1;
             }
 
             //assert_eq!(k.len(), cursor.prefix().len());
 
+            target_depth -= cursor.prefix().len() + 1;
             let dropped = cursor.shrink_to_fit();
             if dropped {
                 if let Some(children) = parent {
@@ -985,7 +988,6 @@ impl<V, const K: usize> Art<V, K> {
                 }
             }
 
-            target_depth -= cursor.prefix().len() + 1;
         }
     }
 
