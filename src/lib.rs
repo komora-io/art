@@ -808,21 +808,29 @@ impl<V: std::fmt::Debug> Node<V> {
         }
     }
 
-    fn shrink_to_fit(&mut self) {
+    fn shrink_to_fit(&mut self) -> bool {
         if !self.should_shrink() {
-            return;
+            return false;
         }
         let old_header = *self.header();
         let children = old_header.children;
         let swapped = std::mem::take(self);
+        let mut dropped = false;
         *self = match (swapped, children) {
-            (Node::Node4(_), 0) => Node::None,
+            (Node::Node4(_), 0) => {
+                dropped = true;
+                Node::None
+            },
             (Node::Node16(n16), 4) => Node::Node4(Box::new(n16.downgrade())),
             (Node::Node48(n48), 16) => Node::Node16(Box::new(n48.downgrade())),
             (Node::Node256(n256), 48) => Node::Node48(Box::new(n256.downgrade())),
             (_, _) => unreachable!(),
         };
-        *self.header_mut() = old_header;
+        if !self.is_none() {
+            *self.header_mut() = old_header;
+        }
+
+        dropped
     }
 
     fn upgrade(&mut self) {
@@ -907,26 +915,47 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
         }
     }
 
+    // []
+    //  don't do anything
+    // [1]
+    //  shrink without while loop
+    // [1][2]
+    //
+    // [1:2]
+    // [1:2][3]
+    // [1][2:3]
+    // [12:3][4]
+    // [1:2][3:4]
     fn prune(&mut self, key: &[u8; K]) {
-        let mut target_depth = key.len();
+        let mut target_depth = K;
 
         while target_depth > 0 {
             let mut k: &[u8] = &key[..target_depth];
             let mut cursor: &mut Node<V> = &mut self.root;
+            let mut parent = None;
 
-            while k.len() > 1 {
+            while k.len() > cursor.prefix().len() + 1 {
                 let prefix = cursor.prefix();
                 assert!(k.starts_with(prefix));
                 let byte = k[prefix.len()];
                 k = &k[prefix.len() + 1..];
 
-                cursor = cursor.child_mut(byte, false, false)
+                let child_mut = cursor.child_mut(byte, false, false)
                     .expect("prune should only be called on \
                             freshly removed keys with a full \
-                            ancestor chain still in-place.").1;
+                            ancestor chain still in-place.");
+                parent = Some(child_mut.0);
+                cursor = child_mut.1;
             }
 
-            cursor.shrink_to_fit();
+            //assert_eq!(k.len(), cursor.prefix().len());
+
+            let dropped = cursor.shrink_to_fit();
+            if dropped {
+                if let Some(children) = parent {
+                    *children = children.checked_sub(1).unwrap();
+                }
+            }
 
             target_depth -= cursor.prefix().len() + 1;
         }
@@ -1198,4 +1227,34 @@ fn regression_04() {
     art.insert([], 3);
 
     assert_eq!(art.iter().count(), 1);
+}
+
+#[test]
+fn regression_05() {
+    let mut art = Art::new();
+
+    let k = [0; 2];
+    art.insert(k, 0);
+    art.remove(&k);
+
+    assert_eq!(art.root, Node::None);
+}
+
+#[test]
+fn regression_06() {
+    let mut art = Art::new();
+
+    let max = 257_u16; // u16:MAX
+
+    for i in 0..max {
+        let k = i.to_be_bytes();
+        art.insert(k, 0);
+    }
+
+    for i in 0..max {
+        let k = i.to_be_bytes();
+        art.remove(&k);
+    }
+
+    assert_eq!(art.root, Node::None);
 }
