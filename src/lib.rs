@@ -25,7 +25,7 @@ pub struct Iter<'a, V, const K: usize> {
     finished_0: bool,
 }
 
-impl<'a, V: std::fmt::Debug, const K: usize> IntoIterator for &'a Art<V, K> {
+impl<'a, V, const K: usize> IntoIterator for &'a Art<V, K> {
     type IntoIter = Iter<'a, V, K>;
     type Item = ([u8; K], &'a V);
 
@@ -34,7 +34,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> IntoIterator for &'a Art<V, K> {
     }
 }
 
-impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
+impl<'a, V, const K: usize> Iter<'a, V, K> {
     fn char_bound(&self, is_forward: bool) -> (Bound<u8>, Bound<u8>) {
         let mut raw_path = [0_u8; K];
         let mut raw_len = 0_usize;
@@ -125,7 +125,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iter<'a, V, K> {
     }
 }
 
-impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
+impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
     type Item = ([u8; K], &'a V);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -207,7 +207,7 @@ impl<'a, V: std::fmt::Debug, const K: usize> Iterator for Iter<'a, V, K> {
     }
 }
 
-impl<'a, V: std::fmt::Debug, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
+impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if K == 0 {
             let k: [u8; K] = [0; K];
@@ -293,7 +293,7 @@ struct NodeIter<'a, V> {
     children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>>,
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
 struct Header {
     children: u16,
     path: [u8; MAX_PATH_COMPRESSION_BYTES],
@@ -301,7 +301,7 @@ struct Header {
 }
 
 // TODO remove box, use tagged pointer + repr(align(8))
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum Node<V> {
     None,
     Node4(Box<Node4<V>>),
@@ -317,7 +317,7 @@ impl<V> Default for Node<V> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Node4<V> {
     header: Header,
     keys: [u8; 4],
@@ -334,7 +334,7 @@ impl<V> Default for Node4<V> {
     }
 }
 
-impl<V: std::fmt::Debug> Node4<V> {
+impl<V> Node4<V> {
     fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         let mut pairs: [(u8, &Node<V>); 4] = [
             (self.keys[0], &self.slots[0]),
@@ -388,7 +388,7 @@ impl<V: std::fmt::Debug> Node4<V> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Node16<V> {
     header: Header,
     keys: [u8; 16],
@@ -405,7 +405,7 @@ impl<V> Default for Node16<V> {
     }
 }
 
-impl<V: std::fmt::Debug> Node16<V> {
+impl<V> Node16<V> {
     fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         let mut pairs: [(u8, &Node<V>); 16] = [
             (self.keys[0], &self.slots[0]),
@@ -491,7 +491,7 @@ impl<V: std::fmt::Debug> Node16<V> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Node48<V> {
     header: Header,
     child_index: [u8; 256],
@@ -508,7 +508,7 @@ impl<V> Default for Node48<V> {
     }
 }
 
-impl<V: std::fmt::Debug> Node48<V> {
+impl<V> Node48<V> {
     fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         self.child_index
             .iter()
@@ -586,13 +586,13 @@ fn slots_array<V, const N: usize>() -> [Node<V>; N] {
     unsafe { (&raw_slots as *const _ as *const [Node<V>; N]).read() }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct Node256<V> {
     header: Header,
     slots: [Node<V>; 256],
 }
 
-impl<V: std::fmt::Debug> Node256<V> {
+impl<V> Node256<V> {
     fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         self.slots
             .iter()
@@ -656,7 +656,35 @@ impl<V, const K: usize> Default for Art<V, K> {
     }
 }
 
-impl<V: std::fmt::Debug> Node<V> {
+impl<V: PartialEq, const K: usize> PartialEq for Art<V, K> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        let mut other_iter = other.iter();
+
+        for self_item in self.iter() {
+            if let Some(other_item) = other_iter.next() {
+                if self_item != other_item {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        if other_iter.next().is_none() {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl<V: Eq, const K: usize> Eq for Art<V, K> {}
+
+impl<V> Node<V> {
     fn truncate_prefix(&mut self, partial_path: &[u8]) {
         // println!("truncating prefix");
         // expand path at shared prefix
@@ -866,7 +894,7 @@ impl<V: std::fmt::Debug> Node<V> {
     }
 }
 
-impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
+impl<V, const K: usize> Art<V, K> {
     pub fn new() -> Art<V, K> {
         Art::default()
     }
@@ -981,7 +1009,7 @@ impl<V: std::fmt::Debug, const K: usize> Art<V, K> {
                 }
                 // we need to create intermediate nodes before
                 // populating the value for this insert
-                *cursor = Node::Node48(Box::new(Node48::default()));
+                *cursor = Node::Node4(Box::new(Node4::default()));
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
