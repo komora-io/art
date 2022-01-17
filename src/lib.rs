@@ -1274,7 +1274,7 @@ fn regression_05() {
 fn regression_06() {
     let mut art = Art::new();
 
-    let max = 257_u16; // u16:MAX
+    let max = u16::MAX as u32 + 1;
 
     for i in 0..max {
         let k = i.to_be_bytes();
