@@ -552,6 +552,7 @@ impl<V> Node48<V> {
 
         for (byte, idx) in self.child_index.iter().enumerate() {
             if *idx != 255 {
+                assert!(!self.slots[*idx as usize].is_none());
                 std::mem::swap(&mut n256.slots[byte], &mut self.slots[*idx as usize]);
             }
         }
@@ -564,7 +565,8 @@ impl<V> Node48<V> {
         let mut dst_idx = 0;
 
         for (byte, idx) in self.child_index.iter().enumerate() {
-            if *idx != 255 && !self.slots[*idx as usize].is_none() {
+            if *idx != 255 {
+                assert!(!self.slots[*idx as usize].is_none());
                 std::mem::swap(&mut self.slots[*idx as usize], &mut n16.slots[dst_idx]);
                 n16.keys[dst_idx] = u8::try_from(byte).unwrap();
                 dst_idx += 1;
@@ -685,6 +687,36 @@ impl<V: PartialEq, const K: usize> PartialEq for Art<V, K> {
 impl<V: Eq, const K: usize> Eq for Art<V, K> {}
 
 impl<V> Node<V> {
+    // returns true if this node went from Node4 to None
+    fn prune(&mut self, partial_path: &[u8]) -> bool {
+        let prefix = self.prefix();
+
+        assert!(partial_path.starts_with(prefix));
+
+        if partial_path.len() > prefix.len() + 1 {
+            let byte = partial_path[prefix.len()];
+            let subpath = &partial_path[prefix.len() + 1..];
+
+            let (_, child) = self.child_mut(byte, false, false).expect(
+                "prune may only be called with \
+                freshly removed keys with a full \
+                ancestor chain still in-place."
+            );
+
+            let child_shrunk = child.prune(subpath);
+            if child_shrunk {
+                let children: &mut u16 = &mut self.header_mut().children;
+                *children = children.checked_sub(1).unwrap();
+
+                if let Node::Node48(n48) = self {
+                    n48.child_index[byte as usize] = 255;
+                }
+            }
+        }
+
+        self.shrink_to_fit()
+    }
+
     fn truncate_prefix(&mut self, partial_path: &[u8]) {
         // println!("truncating prefix");
         // expand path at shared prefix
@@ -840,10 +872,13 @@ impl<V> Node<V> {
         if !self.should_shrink() {
             return false;
         }
+
         let old_header = *self.header();
         let children = old_header.children;
-        let swapped = std::mem::take(self);
+
         let mut dropped = false;
+        let swapped = std::mem::take(self);
+
         *self = match (swapped, children) {
             (Node::Node4(_), 0) => {
                 dropped = true;
@@ -854,7 +889,8 @@ impl<V> Node<V> {
             (Node::Node256(n256), 48) => Node::Node48(Box::new(n256.downgrade())),
             (_, _) => unreachable!(),
         };
-        if !self.is_none() {
+
+        if !dropped {
             *self.header_mut() = old_header;
         }
 
@@ -895,8 +931,14 @@ impl<V> Node<V> {
 }
 
 impl<V, const K: usize> Art<V, K> {
-    pub fn new() -> Art<V, K> {
-        Art::default()
+    pub const fn new() -> Art<V, K> {
+        // TODO compiler error if K is above a range that
+        // will cause stack overflow when the recursive prune
+        // function is called
+        Art {
+            len: 0,
+            root: Node::None,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -955,40 +997,7 @@ impl<V, const K: usize> Art<V, K> {
     // [12:3][4]
     // [1:2][3:4]
     fn prune(&mut self, key: &[u8; K]) {
-        let mut target_depth = K;
-
-        while target_depth > 0 {
-            let mut k: &[u8] = &key[..target_depth];
-            let mut cursor: &mut Node<V> = &mut self.root;
-            let mut parent = None;
-
-            while k.len() > cursor.prefix().len() + 1 {
-                let prefix = cursor.prefix();
-                assert!(k.starts_with(prefix));
-                let byte = k[prefix.len()];
-                k = &k[prefix.len() + 1..];
-
-                let child_mut = cursor.child_mut(byte, false, false).expect(
-                    "prune should only be called on \
-                    freshly removed keys with a full \
-                    ancestor chain still in-place."
-                );
-
-                parent = Some(child_mut.0);
-                cursor = child_mut.1;
-            }
-
-            //assert_eq!(k.len(), cursor.prefix().len());
-
-            target_depth -= cursor.prefix().len() + 1;
-            let dropped = cursor.shrink_to_fit();
-            if dropped {
-                if let Some(children) = parent {
-                    *children = children.checked_sub(1).unwrap();
-                }
-            }
-
-        }
+        self.root.prune(key);
     }
 
     // returns the optional parent node for child maintenance, and the value node
