@@ -293,7 +293,7 @@ struct NodeIter<'a, V> {
     children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>>,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+#[derive(Debug, Default, Clone, Copy)]
 struct Header {
     children: u16,
     path: [u8; MAX_PATH_COMPRESSION_BYTES],
@@ -301,7 +301,7 @@ struct Header {
 }
 
 // TODO remove box, use tagged pointer + repr(align(8))
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 enum Node<V> {
     None,
     Node4(Box<Node4<V>>),
@@ -317,7 +317,7 @@ impl<V> Default for Node<V> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Node4<V> {
     header: Header,
     keys: [u8; 4],
@@ -388,7 +388,7 @@ impl<V> Node4<V> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Node16<V> {
     header: Header,
     keys: [u8; 16],
@@ -491,7 +491,7 @@ impl<V> Node16<V> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Node48<V> {
     header: Header,
     child_index: [u8; 256],
@@ -588,7 +588,7 @@ fn slots_array<V, const N: usize>() -> [Node<V>; N] {
     unsafe { (&raw_slots as *const _ as *const [Node<V>; N]).read() }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Node256<V> {
     header: Header,
     slots: [Node<V>; 256],
@@ -1276,7 +1276,7 @@ fn regression_05() {
     art.insert(k, 0);
     art.remove(&k);
 
-    assert_eq!(art.root, Node::None);
+    assert!(art.root.is_none());
 }
 
 #[test]
@@ -1295,5 +1295,5 @@ fn regression_06() {
         art.remove(&k);
     }
 
-    assert_eq!(art.root, Node::None);
+    assert!(art.root.is_none());
 }
