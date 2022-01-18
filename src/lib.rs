@@ -1,4 +1,3 @@
-use std::mem::MaybeUninit;
 use std::ops::{Bound, RangeBounds};
 
 const MAX_PATH_COMPRESSION_BYTES: usize = 13;
@@ -329,7 +328,7 @@ impl<V> Default for Node4<V> {
         Node4 {
             header: Default::default(),
             keys: [255; 4],
-            slots: slots_array(),
+            slots: [Node::None, Node::None, Node::None, Node::None],
         }
     }
 }
@@ -400,7 +399,12 @@ impl<V> Default for Node16<V> {
         Node16 {
             header: Default::default(),
             keys: [255; 16],
-            slots: slots_array(),
+            slots: [
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+            ],
         }
     }
 }
@@ -503,7 +507,20 @@ impl<V> Default for Node48<V> {
         Node48 {
             header: Default::default(),
             child_index: [255; 256],
-            slots: slots_array(),
+            slots: [
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+            ],
         }
     }
 }
@@ -579,15 +596,6 @@ impl<V> Node48<V> {
     }
 }
 
-fn slots_array<V, const N: usize>() -> [Node<V>; N] {
-    let mut raw_slots: [MaybeUninit<Node<V>>; N] =
-        unsafe { MaybeUninit::<[MaybeUninit<Node<V>>; N]>::uninit().assume_init() };
-    for idx in 0..N {
-        raw_slots[idx].write(Node::None);
-    }
-    unsafe { (&raw_slots as *const _ as *const [Node<V>; N]).read() }
-}
-
 #[derive(Debug, Clone)]
 struct Node256<V> {
     header: Header,
@@ -638,7 +646,72 @@ impl<V> Default for Node256<V> {
     fn default() -> Node256<V> {
         Node256 {
             header: Default::default(),
-            slots: slots_array(),
+            slots: [
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+                Node::None, Node::None, Node::None, Node::None,
+            ],
         }
     }
 }
