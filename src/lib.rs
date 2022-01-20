@@ -1,4 +1,100 @@
-use std::ops::{Bound, RangeBounds};
+use std::ops::{Deref, DerefMut, Bound, RangeBounds};
+
+#[derive(Debug)]
+struct MaybeInline<T>(usize, std::marker::PhantomData<T>);
+
+const fn can_inline<T>() -> bool {
+    std::mem::size_of::<T>() <= std::mem::size_of::<usize>()
+    &&
+    std::mem::align_of::<T>() <= std::mem::align_of::<usize>()
+}
+
+impl<T> Drop for MaybeInline<T> {
+    fn drop(&mut self) {
+        if can_inline::<T>() {
+            unsafe {
+                std::ptr::drop_in_place((&mut self.0) as *mut usize as *mut T)
+            }
+        } else {
+            unsafe {
+                drop(Box::from_raw(self.0 as *mut T))
+            }
+        }
+    }
+}
+
+impl<T:Clone > Clone for MaybeInline<T> {
+    fn clone(&self) -> Self {
+        MaybeInline::new(self.deref().clone())
+    }
+}
+
+impl<T> AsRef<T> for MaybeInline<T> {
+    fn as_ref(&self) -> &T {
+        self.deref()
+    }
+}
+
+impl<T> AsMut<T> for MaybeInline<T> {
+    fn as_mut(&mut self) -> &mut T {
+        self.deref_mut()
+    }
+}
+
+impl<T> Deref for MaybeInline<T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        let ptr = if can_inline::<T>() {
+            (&self.0) as *const usize as *const T
+        } else {
+            self.0 as *const T
+        };
+
+        unsafe {
+            &*ptr
+        }
+    }
+}
+
+impl<T> DerefMut for MaybeInline<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        let ptr = if can_inline::<T>() {
+            (&mut self.0) as *mut usize as *mut T
+        } else {
+            self.0 as *mut T
+        };
+
+        unsafe {
+            &mut *ptr
+        }
+    }
+}
+
+
+impl<T> MaybeInline<T> {
+    fn new(item: T) -> MaybeInline<T> {
+        let integer = if can_inline::<T>() {
+            let mut integer = 0_usize;
+            unsafe {
+                std::ptr::write((&mut integer) as *mut usize as *mut T, item);
+            }
+            integer
+        } else {
+            let ptr: *mut T = Box::into_raw(Box::new(item));
+            ptr as usize
+        };
+        MaybeInline(integer, std::marker::PhantomData)
+    }
+
+    fn take(self) -> T {
+        let item: T = unsafe {
+            std::ptr::read(self.deref())
+        };
+        std::mem::forget(self);
+        item
+    }
+}
 
 const MAX_PATH_COMPRESSION_BYTES: usize = 13;
 
@@ -307,7 +403,7 @@ enum Node<V> {
     Node16(Box<Node16<V>>),
     Node48(Box<Node48<V>>),
     Node256(Box<Node256<V>>),
-    Value(Box<V>),
+    Value(MaybeInline<V>),
 }
 
 impl<V> Default for Node<V> {
@@ -1026,7 +1122,7 @@ impl<V, const K: usize> Art<V, K> {
                 Some(value)
             }
             Node::None => {
-                *cursor = Node::Value(Box::new(value));
+                *cursor = Node::Value(MaybeInline::new(value));
                 if let Some(children) = parent_opt {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -1051,7 +1147,7 @@ impl<V, const K: usize> Art<V, K> {
                     }
                 }
                 self.len -= 1;
-                Some(*old)
+                Some(old.take())
             }
             Node::None => None,
             _ => unreachable!(),
