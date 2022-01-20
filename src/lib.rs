@@ -1,5 +1,8 @@
 use std::ops::{Deref, DerefMut, Bound, RangeBounds};
 
+/// A simple inlinable box that automatically inlines if
+/// a type's size and alignment are less than or equal
+/// to that of `usize`.
 #[derive(Debug)]
 struct MaybeInline<T>(usize, std::marker::PhantomData<T>);
 
@@ -26,18 +29,6 @@ impl<T> Drop for MaybeInline<T> {
 impl<T:Clone > Clone for MaybeInline<T> {
     fn clone(&self) -> Self {
         MaybeInline::new(self.deref().clone())
-    }
-}
-
-impl<T> AsRef<T> for MaybeInline<T> {
-    fn as_ref(&self) -> &T {
-        self.deref()
-    }
-}
-
-impl<T> AsMut<T> for MaybeInline<T> {
-    fn as_mut(&mut self) -> &mut T {
-        self.deref_mut()
     }
 }
 
@@ -71,7 +62,6 @@ impl<T> DerefMut for MaybeInline<T> {
     }
 }
 
-
 impl<T> MaybeInline<T> {
     fn new(item: T) -> MaybeInline<T> {
         let integer = if can_inline::<T>() {
@@ -88,9 +78,18 @@ impl<T> MaybeInline<T> {
     }
 
     fn take(self) -> T {
-        let item: T = unsafe {
-            std::ptr::read(self.deref())
+        let item: T = if can_inline::<T>() {
+            unsafe {
+                std::ptr::read(self.deref())
+            }
+        } else {
+            let ptr: *mut T = self.0 as *mut T;
+            let boxed: Box<T> = unsafe {
+                Box::from_raw(ptr)
+            };
+            *boxed
         };
+
         std::mem::forget(self);
         item
     }

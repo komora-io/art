@@ -73,6 +73,7 @@ impl std::hash::Hasher for Hasher {
     }
 }
 
+#[allow(unused)]
 type FastMap8<K, V> =
     std::collections::HashMap<K, V, std::hash::BuildHasherDefault<Hasher>>;
 
@@ -86,7 +87,7 @@ fn main() {
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
         //println!("{}", k);
-        assert!(art.insert(k.to_be_bytes(), [0_u8]).is_none());
+        assert!(art.insert(k.to_be_bytes(), k).is_none());
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million wps {} mb allocated {} mb freed {} mb resident",
@@ -99,7 +100,7 @@ fn main() {
 
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
-        assert_eq!(art.get(&k.to_be_bytes()), Some(&[0_u8]));
+        assert_eq!(art.get(&k.to_be_bytes()), Some(&k));
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps {} mb allocated {} mb freed {} mb resident",
