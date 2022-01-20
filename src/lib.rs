@@ -1,5 +1,237 @@
 use std::ops::{Deref, DerefMut, Bound, RangeBounds};
 
+#[derive(Debug, Clone)]
+pub struct Art<V, const K: usize> {
+    len: usize,
+    root: Node<V>,
+}
+
+impl<V, const K: usize> Default for Art<V, K> {
+    fn default() -> Art<V, K> {
+        Art {
+            len: 0,
+            root: Node::None,
+        }
+    }
+}
+
+impl<V: PartialEq, const K: usize> PartialEq for Art<V, K> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        let mut other_iter = other.iter();
+
+        for self_item in self.iter() {
+            if let Some(other_item) = other_iter.next() {
+                if self_item != other_item {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
+        if other_iter.next().is_none() {
+            true
+        } else {
+            false
+        }
+    }
+}
+
+impl<V: Eq, const K: usize> Eq for Art<V, K> {}
+
+impl<V, const K: usize> Art<V, K> {
+    pub const fn new() -> Art<V, K> {
+        // TODO compiler error if K is above a range that
+        // will cause stack overflow when the recursive prune
+        // function is called
+        Art {
+            len: 0,
+            root: Node::None,
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn insert(&mut self, key: [u8; K], mut value: V) -> Option<V> {
+        let (parent_opt, cursor) = self.slot_for_key(&key, true).unwrap();
+        match cursor {
+            Node::Value(ref mut old) => {
+                std::mem::swap(&mut **old, &mut value);
+                Some(value)
+            }
+            Node::None => {
+                *cursor = Node::Value(MaybeInline::new(value));
+                if let Some(children) = parent_opt {
+                    *children = children.checked_add(1).unwrap();
+                }
+                self.len += 1;
+                None
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn remove(&mut self, key: &[u8; K]) -> Option<V> {
+        let (parent_opt, cursor) = self.slot_for_key(key, false)?;
+
+        match std::mem::take(cursor) {
+            Node::Value(old) => {
+                if let Some(children) = parent_opt {
+                    *children = children.checked_sub(1).unwrap();
+
+                    if *children == 48 || *children == 16
+                        || *children == 4 || *children == 0 {
+                        self.prune(key);
+                    }
+                }
+                self.len -= 1;
+                Some(old.take())
+            }
+            Node::None => None,
+            _ => unreachable!(),
+        }
+    }
+
+    // []
+    //  don't do anything
+    // [1]
+    //  shrink without while loop
+    // [1][2]
+    //
+    // [1:2]
+    // [1:2][3]
+    // [1][2:3]
+    // [12:3][4]
+    // [1:2][3:4]
+    fn prune(&mut self, key: &[u8; K]) {
+        self.root.prune(key);
+    }
+
+    // returns the optional parent node for child maintenance, and the value node
+    fn slot_for_key(
+        &mut self,
+        key: &[u8; K],
+        is_add: bool,
+    ) -> Option<(Option<&mut u16>, &mut Node<V>)> {
+        let mut parent: Option<&mut u16> = None;
+        let mut path: &[u8] = &key[..];
+        let mut cursor: &mut Node<V> = &mut self.root;
+        // println!("root is {:?}", cursor);
+
+        while !path.is_empty() {
+            //println!("path: {:?} cursor {:?}", path, cursor);
+            cursor.assert_size();
+            if cursor.is_none() {
+                if !is_add {
+                    return None;
+                }
+                // we need to create intermediate nodes before
+                // populating the value for this insert
+                *cursor = Node::Node4(Box::default());
+                if let Some(children) = parent {
+                    *children = children.checked_add(1).unwrap();
+                }
+                let prefix_len = (path.len() - 1).min(MAX_PATH_COMPRESSION_BYTES);
+                let prefix = &path[..prefix_len];
+                cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
+                cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
+                let (p, child) = cursor.child_mut(path[prefix_len], is_add, false).unwrap();
+                parent = Some(p);
+                cursor = child;
+                path = &path[prefix_len + 1..];
+                continue;
+            }
+
+            let prefix = cursor.prefix();
+            let partial_path = &path[..path.len() - 1];
+            if !partial_path.starts_with(prefix) {
+                if !is_add {
+                    return None;
+                }
+                // path compression needs to be reduced
+                // to allow for this key, which does not
+                // share the compressed path.
+                // println!("truncating cursor at {:?}", cursor);
+                cursor.truncate_prefix(partial_path);
+                // println!("cursor is now after truncation {:?}", cursor);
+                continue;
+            }
+
+            let next_byte = path[prefix.len()];
+            path = &path[prefix.len() + 1..];
+
+            //println!("cursor is now {:?}", cursor);
+            let clear_child_index = !is_add && path.is_empty();
+            let (p, next_cursor) =
+                if let Some(opt) = cursor.child_mut(next_byte, is_add, clear_child_index) {
+                    opt
+                } else {
+                    assert!(!is_add);
+                    return None;
+                };
+            cursor = next_cursor;
+            parent = Some(p);
+        }
+
+        Some((parent, cursor))
+    }
+
+    pub fn get(&self, key: &[u8; K]) -> Option<&V> {
+        let mut k: &[u8] = &*key;
+        let mut cursor: &Node<V> = &self.root;
+
+        while !k.is_empty() {
+            let prefix = cursor.prefix();
+
+            if !k.starts_with(prefix) {
+                return None;
+            }
+
+            cursor = cursor.child(k[prefix.len()])?;
+            k = &k[prefix.len() + 1..];
+        }
+
+        match cursor {
+            &Node::Value(ref v) => return Some(v),
+            &Node::None => return None,
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn iter(&self) -> Iter<'_, V, K> {
+        self.range(..)
+    }
+
+    pub fn range<'a, R>(&'a self, range: R) -> Iter<'a, V, K>
+    where
+        R: RangeBounds<[u8; K]>,
+    {
+        Iter {
+            root: self.root.node_iter(),
+            path: vec![],
+            rev_path: vec![],
+            lower_bound: map_bound(range.start_bound(), |b| *b),
+            upper_bound: map_bound(range.end_bound(), |b| *b),
+            finished_0: false,
+        }
+    }
+}
+
+fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
+    match bound {
+        Bound::Unbounded => Bound::Unbounded,
+        Bound::Included(x) => Bound::Included(f(x)),
+        Bound::Excluded(x) => Bound::Excluded(f(x)),
+    }
+}
+
+
 /// A simple inlinable box that automatically inlines if
 /// a type's size and alignment are less than or equal
 /// to that of `usize`.
@@ -811,49 +1043,6 @@ impl<V> Default for Node256<V> {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Art<V, const K: usize> {
-    len: usize,
-    root: Node<V>,
-}
-
-impl<V, const K: usize> Default for Art<V, K> {
-    fn default() -> Art<V, K> {
-        Art {
-            len: 0,
-            root: Node::None,
-        }
-    }
-}
-
-impl<V: PartialEq, const K: usize> PartialEq for Art<V, K> {
-    fn eq(&self, other: &Self) -> bool {
-        if self.len() != other.len() {
-            return false;
-        }
-
-        let mut other_iter = other.iter();
-
-        for self_item in self.iter() {
-            if let Some(other_item) = other_iter.next() {
-                if self_item != other_item {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-
-        if other_iter.next().is_none() {
-            true
-        } else {
-            false
-        }
-    }
-}
-
-impl<V: Eq, const K: usize> Eq for Art<V, K> {}
-
 impl<V> Node<V> {
     // returns true if this node went from Node4 to None
     fn prune(&mut self, partial_path: &[u8]) -> bool {
@@ -1095,194 +1284,6 @@ impl<V> Node<V> {
             node: self,
             children,
         }
-    }
-}
-
-impl<V, const K: usize> Art<V, K> {
-    pub const fn new() -> Art<V, K> {
-        // TODO compiler error if K is above a range that
-        // will cause stack overflow when the recursive prune
-        // function is called
-        Art {
-            len: 0,
-            root: Node::None,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn insert(&mut self, key: [u8; K], mut value: V) -> Option<V> {
-        let (parent_opt, cursor) = self.slot_for_key(&key, true).unwrap();
-        match cursor {
-            Node::Value(ref mut old) => {
-                std::mem::swap(&mut **old, &mut value);
-                Some(value)
-            }
-            Node::None => {
-                *cursor = Node::Value(MaybeInline::new(value));
-                if let Some(children) = parent_opt {
-                    *children = children.checked_add(1).unwrap();
-                }
-                self.len += 1;
-                None
-            }
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn remove(&mut self, key: &[u8; K]) -> Option<V> {
-        let (parent_opt, cursor) = self.slot_for_key(key, false)?;
-
-        match std::mem::take(cursor) {
-            Node::Value(old) => {
-                if let Some(children) = parent_opt {
-                    *children = children.checked_sub(1).unwrap();
-
-                    if *children == 48 || *children == 16
-                        || *children == 4 || *children == 0 {
-                        self.prune(key);
-                    }
-                }
-                self.len -= 1;
-                Some(old.take())
-            }
-            Node::None => None,
-            _ => unreachable!(),
-        }
-    }
-
-    // []
-    //  don't do anything
-    // [1]
-    //  shrink without while loop
-    // [1][2]
-    //
-    // [1:2]
-    // [1:2][3]
-    // [1][2:3]
-    // [12:3][4]
-    // [1:2][3:4]
-    fn prune(&mut self, key: &[u8; K]) {
-        self.root.prune(key);
-    }
-
-    // returns the optional parent node for child maintenance, and the value node
-    fn slot_for_key(
-        &mut self,
-        key: &[u8; K],
-        is_add: bool,
-    ) -> Option<(Option<&mut u16>, &mut Node<V>)> {
-        let mut parent: Option<&mut u16> = None;
-        let mut path: &[u8] = &key[..];
-        let mut cursor: &mut Node<V> = &mut self.root;
-        // println!("root is {:?}", cursor);
-
-        while !path.is_empty() {
-            //println!("path: {:?} cursor {:?}", path, cursor);
-            cursor.assert_size();
-            if cursor.is_none() {
-                if !is_add {
-                    return None;
-                }
-                // we need to create intermediate nodes before
-                // populating the value for this insert
-                *cursor = Node::Node4(Box::default());
-                if let Some(children) = parent {
-                    *children = children.checked_add(1).unwrap();
-                }
-                let prefix_len = (path.len() - 1).min(MAX_PATH_COMPRESSION_BYTES);
-                let prefix = &path[..prefix_len];
-                cursor.header_mut().path[..prefix_len].copy_from_slice(prefix);
-                cursor.header_mut().path_len = u8::try_from(prefix_len).unwrap();
-                let (p, child) = cursor.child_mut(path[prefix_len], is_add, false).unwrap();
-                parent = Some(p);
-                cursor = child;
-                path = &path[prefix_len + 1..];
-                continue;
-            }
-
-            let prefix = cursor.prefix();
-            let partial_path = &path[..path.len() - 1];
-            if !partial_path.starts_with(prefix) {
-                if !is_add {
-                    return None;
-                }
-                // path compression needs to be reduced
-                // to allow for this key, which does not
-                // share the compressed path.
-                // println!("truncating cursor at {:?}", cursor);
-                cursor.truncate_prefix(partial_path);
-                // println!("cursor is now after truncation {:?}", cursor);
-                continue;
-            }
-
-            let next_byte = path[prefix.len()];
-            path = &path[prefix.len() + 1..];
-
-            //println!("cursor is now {:?}", cursor);
-            let clear_child_index = !is_add && path.is_empty();
-            let (p, next_cursor) =
-                if let Some(opt) = cursor.child_mut(next_byte, is_add, clear_child_index) {
-                    opt
-                } else {
-                    assert!(!is_add);
-                    return None;
-                };
-            cursor = next_cursor;
-            parent = Some(p);
-        }
-
-        Some((parent, cursor))
-    }
-
-    pub fn get(&self, key: &[u8; K]) -> Option<&V> {
-        let mut k: &[u8] = &*key;
-        let mut cursor: &Node<V> = &self.root;
-
-        while !k.is_empty() {
-            let prefix = cursor.prefix();
-
-            if !k.starts_with(prefix) {
-                return None;
-            }
-
-            cursor = cursor.child(k[prefix.len()])?;
-            k = &k[prefix.len() + 1..];
-        }
-
-        match cursor {
-            &Node::Value(ref v) => return Some(v),
-            &Node::None => return None,
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn iter(&self) -> Iter<'_, V, K> {
-        self.range(..)
-    }
-
-    pub fn range<'a, R>(&'a self, range: R) -> Iter<'a, V, K>
-    where
-        R: RangeBounds<[u8; K]>,
-    {
-        Iter {
-            root: self.root.node_iter(),
-            path: vec![],
-            rev_path: vec![],
-            lower_bound: map_bound(range.start_bound(), |b| *b),
-            upper_bound: map_bound(range.end_bound(), |b| *b),
-            finished_0: false,
-        }
-    }
-}
-
-fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
-    match bound {
-        Bound::Unbounded => Bound::Unbounded,
-        Bound::Included(x) => Bound::Included(f(x)),
-        Bound::Excluded(x) => Bound::Excluded(f(x)),
     }
 }
 
