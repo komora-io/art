@@ -472,8 +472,8 @@ impl<V> Node4<V> {
         }
     }
 
-    fn upgrade(mut self) -> Node16<V> {
-        let mut n16 = Node16::default();
+    fn upgrade(mut self) -> Box<Node16<V>> {
+        let mut n16 = Box::new(Node16::default());
         for (slot, byte) in self.keys.iter().enumerate() {
             std::mem::swap(&mut self.slots[slot], &mut n16.slots[slot]);
             n16.keys[slot] = *byte;
@@ -560,8 +560,8 @@ impl<V> Node16<V> {
         }
     }
 
-    fn upgrade(mut self) -> Node48<V> {
-        let mut n48 = Node48::default();
+    fn upgrade(mut self) -> Box<Node48<V>> {
+        let mut n48 = Box::new(Node48::default());
         for (slot, byte) in self.keys.iter().enumerate() {
             if !self.slots[slot].is_none() {
                 std::mem::swap(&mut self.slots[slot], &mut n48.slots[slot]);
@@ -572,8 +572,8 @@ impl<V> Node16<V> {
         n48
     }
 
-    fn downgrade(mut self) -> Node4<V> {
-        let mut n4 = Node4::default();
+    fn downgrade(mut self) -> Box<Node4<V>> {
+        let mut n4 = Box::new(Node4::default());
         let mut dst_idx = 0;
 
         for (slot, byte) in self.keys.iter().enumerate() {
@@ -659,8 +659,8 @@ impl<V> Node48<V> {
         }
     }
 
-    fn upgrade(mut self) -> Node256<V> {
-        let mut n256 = Node256::default();
+    fn upgrade(mut self) -> Box<Node256<V>> {
+        let mut n256 = Box::new(Node256::default());
 
         for (byte, idx) in self.child_index.iter().enumerate() {
             if *idx != 255 {
@@ -672,8 +672,8 @@ impl<V> Node48<V> {
         n256
     }
 
-    fn downgrade(mut self) -> Node16<V> {
-        let mut n16 = Node16::default();
+    fn downgrade(mut self) -> Box<Node16<V>> {
+        let mut n16 = Box::new(Node16::default());
         let mut dst_idx = 0;
 
         for (byte, idx) in self.child_index.iter().enumerate() {
@@ -719,8 +719,8 @@ impl<V> Node256<V> {
         (&mut self.header.children, slot)
     }
 
-    fn downgrade(mut self) -> Node48<V> {
-        let mut n48 = Node48::default();
+    fn downgrade(mut self) -> Box<Node48<V>> {
+        let mut n48 = Box::new(Node48::default());
         let mut dst_idx = 0;
 
         for (byte, slot) in self.slots.iter_mut().enumerate() {
@@ -1052,9 +1052,9 @@ impl<V> Node<V> {
                 dropped = true;
                 Node::None
             },
-            (Node::Node16(n16), 4) => Node::Node4(Box::new(n16.downgrade())),
-            (Node::Node48(n48), 16) => Node::Node16(Box::new(n48.downgrade())),
-            (Node::Node256(n256), 48) => Node::Node48(Box::new(n256.downgrade())),
+            (Node::Node16(n16), 4) => Node::Node4(n16.downgrade()),
+            (Node::Node48(n48), 16) => Node::Node16(n48.downgrade()),
+            (Node::Node256(n256), 48) => Node::Node48(n256.downgrade()),
             (_, _) => unreachable!(),
         };
 
@@ -1069,9 +1069,9 @@ impl<V> Node<V> {
         let old_header = *self.header();
         let swapped = std::mem::take(self);
         *self = match swapped {
-            Node::Node4(n4) => Node::Node16(Box::new(n4.upgrade())),
-            Node::Node16(n16) => Node::Node48(Box::new(n16.upgrade())),
-            Node::Node48(n48) => Node::Node256(Box::new(n48.upgrade())),
+            Node::Node4(n4) => Node::Node16(n4.upgrade()),
+            Node::Node16(n16) => Node::Node48(n16.upgrade()),
+            Node::Node48(n48) => Node::Node256(n48.upgrade()),
             Node::Node256(_) => unreachable!(),
             Node::None => unreachable!(),
             Node::Value(_) => unreachable!(),
