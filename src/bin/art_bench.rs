@@ -41,6 +41,41 @@ unsafe impl std::alloc::GlobalAlloc for Alloc {
     }
 }
 
+// extracted from the fnv crate for minor, mostly
+// compile-time optimizations.
+#[allow(missing_copy_implementations)]
+pub struct Hasher(u64);
+
+impl Default for Hasher {
+    #[inline]
+    fn default() -> Hasher {
+        Hasher(0xcbf29ce484222325)
+    }
+}
+
+impl std::hash::Hasher for Hasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    #[allow(clippy::cast_lossless)]
+    fn write(&mut self, bytes: &[u8]) {
+        let Hasher(mut hash) = *self;
+
+        for byte in bytes.iter() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+
+        *self = Hasher(hash);
+    }
+}
+
+type FastMap8<K, V> =
+    std::collections::HashMap<K, V, std::hash::BuildHasherDefault<Hasher>>;
+
 fn main() {
     const N: u64 = 100_000_000;
 
@@ -126,7 +161,7 @@ fn main() {
 
     println!();
     println!("HashMap:");
-    let mut hash = std::collections::HashMap::new();
+    let mut hash = FastMap8::default();
 
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
