@@ -1,4 +1,5 @@
 use std::ops::{Deref, DerefMut, Bound, RangeBounds};
+use std::marker::PhantomData;
 
 #[derive(Debug, Clone)]
 pub struct Art<V, const K: usize> {
@@ -10,7 +11,7 @@ impl<V, const K: usize> Default for Art<V, K> {
     fn default() -> Art<V, K> {
         Art {
             len: 0,
-            root: Node::None,
+            root: Node::none(),
         }
     }
 }
@@ -50,7 +51,7 @@ impl<V, const K: usize> Art<V, K> {
         // function is called
         Art {
             len: 0,
-            root: Node::None,
+            root: Node::none(),
         }
     }
 
@@ -60,13 +61,13 @@ impl<V, const K: usize> Art<V, K> {
 
     pub fn insert(&mut self, key: [u8; K], mut value: V) -> Option<V> {
         let (parent_opt, cursor) = self.slot_for_key(&key, true).unwrap();
-        match cursor {
-            Node::Value(ref mut old) => {
+        match cursor.deref_mut() {
+            NodeMut::Value(ref mut old) => {
                 std::mem::swap(&mut **old, &mut value);
                 Some(value)
             }
-            Node::None => {
-                *cursor = Node::Value(MaybeInline::new(value));
+            NodeMut::None => {
+                *cursor = Node::value(MaybeInline::new(value));
                 if let Some(children) = parent_opt {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -80,8 +81,8 @@ impl<V, const K: usize> Art<V, K> {
     pub fn remove(&mut self, key: &[u8; K]) -> Option<V> {
         let (parent_opt, cursor) = self.slot_for_key(key, false)?;
 
-        match std::mem::take(cursor) {
-            Node::Value(old) => {
+        match std::mem::take(cursor).deref_mut() {
+            NodeMut::Value(old) => {
                 if let Some(children) = parent_opt {
                     *children = children.checked_sub(1).unwrap();
 
@@ -133,7 +134,7 @@ impl<V, const K: usize> Art<V, K> {
                 }
                 // we need to create intermediate nodes before
                 // populating the value for this insert
-                *cursor = Node::Node4(Box::default());
+                *cursor = Node::node4(Box::default());
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -197,9 +198,9 @@ impl<V, const K: usize> Art<V, K> {
             k = &k[prefix.len() + 1..];
         }
 
-        match cursor {
-            &Node::Value(ref v) => return Some(v),
-            &Node::None => return None,
+        match cursor.deref() {
+            NodeRef::Value(ref v) => return Some(v),
+            NodeRef::None => return None,
             _ => unreachable!(),
         }
     }
@@ -236,12 +237,23 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
 /// a type's size and alignment are less than or equal
 /// to that of `usize`.
 #[derive(Debug)]
-struct MaybeInline<T>(usize, std::marker::PhantomData<T>);
+struct MaybeInline<T>(usize, PhantomData<T>);
 
 const fn can_inline<T>() -> bool {
     std::mem::size_of::<T>() <= std::mem::size_of::<usize>()
     &&
     std::mem::align_of::<T>() <= std::mem::align_of::<usize>()
+}
+
+#[cfg(target_pointer_width = "64")]
+const fn size_tests() {
+    use std::mem::size_of;
+    let _: [u8; 8] = [0; size_of::<Node<()>>()];
+    let _: [u8; 16] = [0; size_of::<Header>()];
+    let _: [u8; 52] = [0; size_of::<Node4<()>>()];
+    let _: [u8; 160] = [0; size_of::<Node16<()>>()];
+    let _: [u8; 656] = [0; size_of::<Node48<()>>()];
+    let _: [u8; 2064] = [0; size_of::<Node256<()>>()];
 }
 
 impl<T> Drop for MaybeInline<T> {
@@ -306,7 +318,7 @@ impl<T> MaybeInline<T> {
             let ptr: *mut T = Box::into_raw(Box::new(item));
             ptr as usize
         };
-        MaybeInline(integer, std::marker::PhantomData)
+        MaybeInline(integer, PhantomData)
     }
 
     fn take(self) -> T {
@@ -461,9 +473,9 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
             let finished = self.finished_0;
             let can_return = in_bounds && !finished;
             self.finished_0 = true;
-            match self.root.node {
-                &Node::Value(ref v) if can_return => return Some(([0; K], v)),
-                &Node::Value(_) | &Node::None => return None,
+            match self.root.node.deref() {
+                NodeRef::Value(ref v) if can_return => return Some(([0; K], v)),
+                NodeRef::Value(_) | NodeRef::None => return None,
                 _ => unreachable!(),
             }
         }
@@ -482,11 +494,11 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
                 if !next_c_bound.contains(&c) {
                     continue;
                 }
-                match node {
-                    Node::Value(v) => break (c, v),
-                    Node::None => unreachable!(),
+                match node.deref() {
+                    NodeRef::Value(v) => break (c, v),
+                    NodeRef::None => unreachable!(),
                     other => {
-                        let iter = other.node_iter();
+                        let iter = node.node_iter();
                         self.path.push((c, iter))
                     }
                 }
@@ -497,11 +509,11 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
                     continue;
                 }
 
-                match node {
-                    Node::Value(v) => break (c, v),
-                    Node::None => unreachable!(),
+                match node.deref() {
+                    NodeRef::Value(v) => break (c, v),
+                    NodeRef::None => unreachable!(),
                     other => {
-                        let iter = other.node_iter();
+                        let iter = node.node_iter();
                         self.path.push((c, iter))
                     }
                 }
@@ -541,9 +553,9 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
             let finished = self.finished_0;
             let can_return = in_bounds && !finished;
             self.finished_0 = true;
-            match self.root.node {
-                &Node::Value(ref v) if can_return => return Some(([0; K], v)),
-                &Node::Value(_) | &Node::None => return None,
+            match self.root.node.deref() {
+                NodeRef::Value(ref v) if can_return => return Some(([0; K], v)),
+                NodeRef::Value(_) | NodeRef::None => return None,
                 _ => unreachable!(),
             }
         }
@@ -563,11 +575,11 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
                     continue;
                 }
 
-                match node {
-                    Node::Value(v) => break (c, v),
-                    Node::None => unreachable!(),
+                match node.deref() {
+                    NodeRef::Value(v) => break (c, v),
+                    NodeRef::None => unreachable!(),
                     other => {
-                        let iter = other.node_iter();
+                        let iter = node.node_iter();
                         self.rev_path.push((c, iter))
                     }
                 }
@@ -578,11 +590,11 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
                     continue;
                 }
 
-                match node {
-                    Node::Value(v) => break (c, v),
-                    Node::None => unreachable!(),
+                match node.deref() {
+                    NodeRef::Value(v) => break (c, v),
+                    NodeRef::None => unreachable!(),
                     other => {
-                        let iter = other.node_iter();
+                        let iter = node.node_iter();
                         self.rev_path.push((c, iter))
                     }
                 }
@@ -626,24 +638,82 @@ struct Header {
     path_len: u8,
 }
 
-// TODO remove box, use tagged pointer + repr(align(8))
+// TODO correctly implement Debug and Clone
 #[derive(Debug, Clone)]
-enum Node<V> {
+struct Node<V>(usize, PhantomData<V>);
+
+const TAG_NONE: usize = 0;
+const TAG_V: usize = 1;
+const TAG_4: usize = 2;
+const TAG_16: usize = 3;
+const TAG_48: usize = 4;
+const TAG_256: usize = 5;
+
+enum NodeRef<'a, V> {
     None,
-    Node4(Box<Node4<V>>),
-    Node16(Box<Node16<V>>),
-    Node48(Box<Node48<V>>),
-    Node256(Box<Node256<V>>),
-    Value(MaybeInline<V>),
+    Value(&'a V),
+    Node4(&'a Node4<V>),
+    Node16(&'a Node16<V>),
+    Node48(&'a Node48<V>),
+    Node256(&'a Node256<V>),
+}
+
+enum NodeMut<'a, V> {
+    None,
+    Value(&'a mut V),
+    Node4(&'a mut Node4<V>),
+    Node16(&'a mut Node16<V>),
+    Node48(&'a mut Node48<V>),
+    Node256(&'a mut Node256<V>),
 }
 
 impl<V> Default for Node<V> {
     fn default() -> Node<V> {
-        Node::None
+        Node::none()
     }
 }
 
 impl<V> Node<V> {
+    const fn none() -> Node<V> {
+        Node(TAG_NONE, PhantomData)
+    }
+
+    fn node4(n4: Box<Node4<V>>) -> Node<V> {
+        let ptr: *mut Node4<V> = Box::into_raw(n4);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_4, 0);
+        Node(us | TAG_4, PhantomData)
+    }
+
+    fn node16(n16: Box<Node16<V>>) -> Node<V> {
+        let ptr: *mut Node16<V> = Box::into_raw(n16);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_16, 0);
+        Node(us | TAG_16, PhantomData)
+    }
+
+    fn node48(n48: Box<Node48<V>>) -> Node<V> {
+        let ptr: *mut Node48<V> = Box::into_raw(n48);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_48, 0);
+        Node(us | TAG_48, PhantomData)
+    }
+
+    fn node256(n256: Box<Node256<V>>) -> Node<V> {
+        let ptr: *mut Node256<V> = Box::into_raw(n256);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_256, 0);
+        Node(us | TAG_256, PhantomData)
+    }
+
+    fn deref(&self) -> NodeRef<'_, V> {
+        todo!()
+    }
+
+    fn deref_mut(&mut self) -> NodeMut<'_, V> {
+        todo!()
+    }
+
     // returns true if this node went from Node4 to None
     fn prune(&mut self, partial_path: &[u8]) -> bool {
         let prefix = self.prefix();
@@ -665,7 +735,7 @@ impl<V> Node<V> {
                 let children: &mut u16 = &mut self.header_mut().children;
                 *children = children.checked_sub(1).unwrap();
 
-                if let Node::Node48(n48) = self {
+                if let NodeMut::Node48(n48) = self.deref_mut() {
                     n48.child_index[byte as usize] = 255;
                 }
             }
@@ -691,7 +761,7 @@ impl<V> Node<V> {
         new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
         new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
 
-        let new_node = Node::Node4(new_node4);
+        let new_node = Node::node4(new_node4);
 
         assert!(prefix.starts_with(new_node.prefix()));
 
@@ -719,17 +789,17 @@ impl<V> Node<V> {
 
     #[inline]
     fn is_none(&self) -> bool {
-        matches!(self, Node::None)
+        self.0 == TAG_NONE
     }
 
     fn assert_size(&self) {
         debug_assert_eq!(
             {
-                let slots: &[Node<V>] = match self {
-                    Node::Node4(n4) => &n4.slots,
-                    Node::Node16(n16) => &n16.slots,
-                    Node::Node48(n48) => &n48.slots,
-                    Node::Node256(n256) => &n256.slots,
+                let slots: &[Node<V>] = match self.deref() {
+                    NodeRef::Node4(n4) => &n4.slots,
+                    NodeRef::Node16(n16) => &n16.slots,
+                    NodeRef::Node48(n48) => &n48.slots,
+                    NodeRef::Node256(n256) => &n256.slots,
                     _ => &[],
                 };
                 slots.iter().filter(|s| !s.is_none()).count()
@@ -739,11 +809,11 @@ impl<V> Node<V> {
     }
 
     fn is_full(&self) -> bool {
-        match self {
-            Node::Node4(_) => 4 == self.len(),
-            Node::Node16(_) => 16 == self.len(),
-            Node::Node48(_) => 48 == self.len(),
-            Node::Node256(_) => 256 == self.len(),
+        match self.deref() {
+            NodeRef::Node4(_) => 4 == self.len(),
+            NodeRef::Node16(_) => 16 == self.len(),
+            NodeRef::Node48(_) => 48 == self.len(),
+            NodeRef::Node256(_) => 256 == self.len(),
             _ => unreachable!(),
         }
     }
@@ -753,22 +823,22 @@ impl<V> Node<V> {
     }
 
     fn header(&self) -> &Header {
-        match self {
-            Node::Node4(n4) => &n4.header,
-            Node::Node16(n16) => &n16.header,
-            Node::Node48(n48) => &n48.header,
-            Node::Node256(n256) => &n256.header,
-            Node::None => &NONE_HEADER,
-            Node::Value(_) => &VALUE_HEADER,
+        match self.deref() {
+            NodeRef::Node4(n4) => &n4.header,
+            NodeRef::Node16(n16) => &n16.header,
+            NodeRef::Node48(n48) => &n48.header,
+            NodeRef::Node256(n256) => &n256.header,
+            NodeRef::None => &NONE_HEADER,
+            NodeRef::Value(_) => &VALUE_HEADER,
         }
     }
 
     fn header_mut(&mut self) -> &mut Header {
-        match self {
-            Node::Node4(n4) => &mut n4.header,
-            Node::Node16(n16) => &mut n16.header,
-            Node::Node48(n48) => &mut n48.header,
-            Node::Node256(n256) => &mut n256.header,
+        match self.deref_mut() {
+            NodeMut::Node4(n4) => &mut n4.header,
+            NodeMut::Node16(n16) => &mut n16.header,
+            NodeMut::Node48(n48) => &mut n48.header,
+            NodeMut::Node256(n256) => &mut n256.header,
             _ => unreachable!(),
         }
     }
@@ -779,13 +849,13 @@ impl<V> Node<V> {
     }
 
     fn child(&self, byte: u8) -> Option<&Node<V>> {
-        match self {
-            Node::Node4(n4) => n4.child(byte),
-            Node::Node16(n16) => n16.child(byte),
-            Node::Node48(n48) => n48.child(byte),
-            Node::Node256(n256) => n256.child(byte),
-            Node::None => None,
-            Node::Value(_) => unreachable!(),
+        match self.deref() {
+            NodeRef::Node4(n4) => n4.child(byte),
+            NodeRef::Node16(n16) => n16.child(byte),
+            NodeRef::Node48(n48) => n48.child(byte),
+            NodeRef::Node256(n256) => n256.child(byte),
+            NodeRef::None => None,
+            NodeRef::Value(_) => unreachable!(),
         }
     }
 
@@ -805,22 +875,22 @@ impl<V> Node<V> {
             }
         }
 
-        Some(match self {
-            Node::Node4(n4) => n4.child_mut(byte),
-            Node::Node16(n16) => n16.child_mut(byte),
-            Node::Node48(n48) => n48.child_mut(byte, clear_child_index),
-            Node::Node256(n256) => n256.child_mut(byte),
-            Node::None => unreachable!(),
-            Node::Value(_) => unreachable!(),
+        Some(match self.deref_mut() {
+            NodeMut::Node4(n4) => n4.child_mut(byte),
+            NodeMut::Node16(n16) => n16.child_mut(byte),
+            NodeMut::Node48(n48) => n48.child_mut(byte, clear_child_index),
+            NodeMut::Node256(n256) => n256.child_mut(byte),
+            NodeMut::None => unreachable!(),
+            NodeMut::Value(_) => unreachable!(),
         })
     }
 
     fn should_shrink(&self) -> bool {
-        match (self, self.len()) {
-            (Node::Node4(_), 0) |
-            (Node::Node16(_), 4) |
-            (Node::Node48(_), 16) |
-            (Node::Node256(_), 48) => true,
+        match (self.deref(), self.len()) {
+            (NodeRef::Node4(_), 0) |
+            (NodeRef::Node16(_), 4) |
+            (NodeRef::Node48(_), 16) |
+            (NodeRef::Node256(_), 48) => true,
             (_, _) => false,
         }
     }
@@ -836,14 +906,14 @@ impl<V> Node<V> {
         let mut dropped = false;
         let swapped = std::mem::take(self);
 
-        *self = match (swapped, children) {
-            (Node::Node4(_), 0) => {
+        *self = match (swapped.deref_mut(), children) {
+            (NodeMut::Node4(_), 0) => {
                 dropped = true;
-                Node::None
+                Node::none()
             },
-            (Node::Node16(n16), 4) => Node::Node4(n16.downgrade()),
-            (Node::Node48(n48), 16) => Node::Node16(n48.downgrade()),
-            (Node::Node256(n256), 48) => Node::Node48(n256.downgrade()),
+            (NodeMut::Node16(n16), 4) => Node::node4(n16.downgrade()),
+            (NodeMut::Node48(n48), 16) => Node::node16(n48.downgrade()),
+            (NodeMut::Node256(n256), 48) => Node::node48(n256.downgrade()),
             (_, _) => unreachable!(),
         };
 
@@ -857,27 +927,27 @@ impl<V> Node<V> {
     fn upgrade(&mut self) {
         let old_header = *self.header();
         let swapped = std::mem::take(self);
-        *self = match swapped {
-            Node::Node4(n4) => Node::Node16(n4.upgrade()),
-            Node::Node16(n16) => Node::Node48(n16.upgrade()),
-            Node::Node48(n48) => Node::Node256(n48.upgrade()),
-            Node::Node256(_) => unreachable!(),
-            Node::None => unreachable!(),
-            Node::Value(_) => unreachable!(),
+        *self = match swapped.deref_mut() {
+            NodeMut::Node4(n4) => Node::node16(n4.upgrade()),
+            NodeMut::Node16(n16) => Node::node48(n16.upgrade()),
+            NodeMut::Node48(n48) => Node::node256(n48.upgrade()),
+            NodeMut::Node256(_) => unreachable!(),
+            NodeMut::None => unreachable!(),
+            NodeMut::Value(_) => unreachable!(),
         };
         *self.header_mut() = old_header;
     }
 
     fn node_iter<'a>(&'a self) -> NodeIter<'a, V> {
-        let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> = match self {
-            Node::Node4(n4) => Box::new(n4.iter()),
-            Node::Node16(n16) => Box::new(n16.iter()),
-            Node::Node48(n48) => Box::new(n48.iter()),
-            Node::Node256(n256) => Box::new(n256.iter()),
+        let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> = match self.deref() {
+            NodeRef::Node4(n4) => Box::new(n4.iter()),
+            NodeRef::Node16(n16) => Box::new(n16.iter()),
+            NodeRef::Node48(n48) => Box::new(n48.iter()),
+            NodeRef::Node256(n256) => Box::new(n256.iter()),
 
             // this is only an iterator over nodes, not leaf values
-            Node::None => Box::new([].into_iter()),
-            Node::Value(_) => Box::new([].into_iter()),
+            NodeRef::None => Box::new([].into_iter()),
+            NodeRef::Value(_) => Box::new([].into_iter()),
         };
 
         NodeIter {
@@ -900,7 +970,7 @@ impl<V> Default for Node4<V> {
         Node4 {
             header: Default::default(),
             keys: [255; 4],
-            slots: [Node::None, Node::None, Node::None, Node::None],
+            slots: [Node::none(), Node::none(), Node::none(), Node::none()],
         }
     }
 }
@@ -972,10 +1042,10 @@ impl<V> Default for Node16<V> {
             header: Default::default(),
             keys: [255; 16],
             slots: [
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
             ],
         }
     }
@@ -1080,18 +1150,18 @@ impl<V> Default for Node48<V> {
             header: Default::default(),
             child_index: [255; 256],
             slots: [
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
             ],
         }
     }
@@ -1219,70 +1289,70 @@ impl<V> Default for Node256<V> {
         Node256 {
             header: Default::default(),
             slots: [
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
+                Node::none(), Node::none(), Node::none(), Node::none(),
             ],
         }
     }
