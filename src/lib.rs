@@ -473,7 +473,7 @@ impl<V> Node4<V> {
     }
 
     fn upgrade(mut self) -> Box<Node16<V>> {
-        let mut n16 = Box::new(Node16::default());
+        let mut n16: Box<Node16<V>> = Box::default();
         for (slot, byte) in self.keys.iter().enumerate() {
             std::mem::swap(&mut self.slots[slot], &mut n16.slots[slot]);
             n16.keys[slot] = *byte;
@@ -561,7 +561,7 @@ impl<V> Node16<V> {
     }
 
     fn upgrade(mut self) -> Box<Node48<V>> {
-        let mut n48 = Box::new(Node48::default());
+        let mut n48: Box<Node48<V>> = Box::default();
         for (slot, byte) in self.keys.iter().enumerate() {
             if !self.slots[slot].is_none() {
                 std::mem::swap(&mut self.slots[slot], &mut n48.slots[slot]);
@@ -573,7 +573,7 @@ impl<V> Node16<V> {
     }
 
     fn downgrade(mut self) -> Box<Node4<V>> {
-        let mut n4 = Box::new(Node4::default());
+        let mut n4: Box<Node4<V>> = Box::default();
         let mut dst_idx = 0;
 
         for (slot, byte) in self.keys.iter().enumerate() {
@@ -660,7 +660,7 @@ impl<V> Node48<V> {
     }
 
     fn upgrade(mut self) -> Box<Node256<V>> {
-        let mut n256 = Box::new(Node256::default());
+        let mut n256: Box<Node256<V>> = Box::default();
 
         for (byte, idx) in self.child_index.iter().enumerate() {
             if *idx != 255 {
@@ -673,7 +673,7 @@ impl<V> Node48<V> {
     }
 
     fn downgrade(mut self) -> Box<Node16<V>> {
-        let mut n16 = Box::new(Node16::default());
+        let mut n16: Box<Node16<V>> = Box::default();
         let mut dst_idx = 0;
 
         for (byte, idx) in self.child_index.iter().enumerate() {
@@ -720,7 +720,7 @@ impl<V> Node256<V> {
     }
 
     fn downgrade(mut self) -> Box<Node48<V>> {
-        let mut n48 = Box::new(Node48::default());
+        let mut n48: Box<Node48<V>> = Box::default();
         let mut dst_idx = 0;
 
         for (byte, slot) in self.slots.iter_mut().enumerate() {
@@ -898,11 +898,11 @@ impl<V> Node<V> {
             .count();
 
         // println!("truncated node has path of len {} with a reduction of {}", shared_bytes, prefix.len() - shared_bytes);
-        let mut new_node4 = Node4::default();
+        let mut new_node4: Box<Node4<V>> = Box::default();
         new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
         new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
 
-        let new_node = Node::Node4(Box::new(new_node4));
+        let new_node = Node::Node4(new_node4);
 
         assert!(prefix.starts_with(new_node.prefix()));
 
@@ -1188,7 +1188,7 @@ impl<V, const K: usize> Art<V, K> {
                 }
                 // we need to create intermediate nodes before
                 // populating the value for this insert
-                *cursor = Node::Node4(Box::new(Node4::default()));
+                *cursor = Node::Node4(Box::default());
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
