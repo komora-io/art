@@ -643,6 +643,251 @@ impl<V> Default for Node<V> {
     }
 }
 
+impl<V> Node<V> {
+    // returns true if this node went from Node4 to None
+    fn prune(&mut self, partial_path: &[u8]) -> bool {
+        let prefix = self.prefix();
+
+        assert!(partial_path.starts_with(prefix));
+
+        if partial_path.len() > prefix.len() + 1 {
+            let byte = partial_path[prefix.len()];
+            let subpath = &partial_path[prefix.len() + 1..];
+
+            let (_, child) = self.child_mut(byte, false, false).expect(
+                "prune may only be called with \
+                freshly removed keys with a full \
+                ancestor chain still in-place."
+            );
+
+            let child_shrunk = child.prune(subpath);
+            if child_shrunk {
+                let children: &mut u16 = &mut self.header_mut().children;
+                *children = children.checked_sub(1).unwrap();
+
+                if let Node::Node48(n48) = self {
+                    n48.child_index[byte as usize] = 255;
+                }
+            }
+        }
+
+        self.shrink_to_fit()
+    }
+
+    fn truncate_prefix(&mut self, partial_path: &[u8]) {
+        // println!("truncating prefix");
+        // expand path at shared prefix
+        //println!("chopping off a prefix at node {:?} since our partial path is {:?}", cursor.header(), partial_path);
+        let prefix = self.prefix();
+
+        let shared_bytes = partial_path
+            .iter()
+            .zip(prefix.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+
+        // println!("truncated node has path of len {} with a reduction of {}", shared_bytes, prefix.len() - shared_bytes);
+        let mut new_node4: Box<Node4<V>> = Box::default();
+        new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
+        new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
+
+        let new_node = Node::Node4(new_node4);
+
+        assert!(prefix.starts_with(new_node.prefix()));
+
+        let mut old_cursor = std::mem::replace(self, new_node);
+
+        let old_cursor_header = old_cursor.header_mut();
+        let old_cursor_new_child_byte = old_cursor_header.path[shared_bytes];
+
+        // we add +1 because we must account for the extra byte
+        // reduced from the node's fan-out itself.
+        old_cursor_header.path.rotate_left(shared_bytes + 1);
+        old_cursor_header.path_len = old_cursor_header
+            .path_len
+            .checked_sub(u8::try_from(shared_bytes + 1).unwrap())
+            .unwrap();
+
+        let (_, child) = self
+            .child_mut(old_cursor_new_child_byte, true, false)
+            .unwrap();
+        *child = old_cursor;
+        child.assert_size();
+
+        self.header_mut().children = 1;
+    }
+
+    #[inline]
+    fn is_none(&self) -> bool {
+        matches!(self, Node::None)
+    }
+
+    fn assert_size(&self) {
+        debug_assert_eq!(
+            {
+                let slots: &[Node<V>] = match self {
+                    Node::Node4(n4) => &n4.slots,
+                    Node::Node16(n16) => &n16.slots,
+                    Node::Node48(n48) => &n48.slots,
+                    Node::Node256(n256) => &n256.slots,
+                    _ => &[],
+                };
+                slots.iter().filter(|s| !s.is_none()).count()
+            },
+            self.len(),
+        )
+    }
+
+    fn is_full(&self) -> bool {
+        match self {
+            Node::Node4(_) => 4 == self.len(),
+            Node::Node16(_) => 16 == self.len(),
+            Node::Node48(_) => 48 == self.len(),
+            Node::Node256(_) => 256 == self.len(),
+            _ => unreachable!(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.header().children as usize
+    }
+
+    fn header(&self) -> &Header {
+        match self {
+            Node::Node4(n4) => &n4.header,
+            Node::Node16(n16) => &n16.header,
+            Node::Node48(n48) => &n48.header,
+            Node::Node256(n256) => &n256.header,
+            Node::None => &NONE_HEADER,
+            Node::Value(_) => &VALUE_HEADER,
+        }
+    }
+
+    fn header_mut(&mut self) -> &mut Header {
+        match self {
+            Node::Node4(n4) => &mut n4.header,
+            Node::Node16(n16) => &mut n16.header,
+            Node::Node48(n48) => &mut n48.header,
+            Node::Node256(n256) => &mut n256.header,
+            _ => unreachable!(),
+        }
+    }
+
+    fn prefix(&self) -> &[u8] {
+        let header = self.header();
+        &header.path[..header.path_len as usize]
+    }
+
+    fn child(&self, byte: u8) -> Option<&Node<V>> {
+        match self {
+            Node::Node4(n4) => n4.child(byte),
+            Node::Node16(n16) => n16.child(byte),
+            Node::Node48(n48) => n48.child(byte),
+            Node::Node256(n256) => n256.child(byte),
+            Node::None => None,
+            Node::Value(_) => unreachable!(),
+        }
+    }
+
+    fn child_mut(
+        &mut self,
+        byte: u8,
+        is_add: bool,
+        clear_child_index: bool,
+    ) -> Option<(&mut u16, &mut Node<V>)> {
+        // TODO this is gross
+        if self.child(byte).is_none() {
+            if !is_add {
+                return None;
+            }
+            if self.is_full() {
+                self.upgrade()
+            }
+        }
+
+        Some(match self {
+            Node::Node4(n4) => n4.child_mut(byte),
+            Node::Node16(n16) => n16.child_mut(byte),
+            Node::Node48(n48) => n48.child_mut(byte, clear_child_index),
+            Node::Node256(n256) => n256.child_mut(byte),
+            Node::None => unreachable!(),
+            Node::Value(_) => unreachable!(),
+        })
+    }
+
+    fn should_shrink(&self) -> bool {
+        match (self, self.len()) {
+            (Node::Node4(_), 0) |
+            (Node::Node16(_), 4) |
+            (Node::Node48(_), 16) |
+            (Node::Node256(_), 48) => true,
+            (_, _) => false,
+        }
+    }
+
+    fn shrink_to_fit(&mut self) -> bool {
+        if !self.should_shrink() {
+            return false;
+        }
+
+        let old_header = *self.header();
+        let children = old_header.children;
+
+        let mut dropped = false;
+        let swapped = std::mem::take(self);
+
+        *self = match (swapped, children) {
+            (Node::Node4(_), 0) => {
+                dropped = true;
+                Node::None
+            },
+            (Node::Node16(n16), 4) => Node::Node4(n16.downgrade()),
+            (Node::Node48(n48), 16) => Node::Node16(n48.downgrade()),
+            (Node::Node256(n256), 48) => Node::Node48(n256.downgrade()),
+            (_, _) => unreachable!(),
+        };
+
+        if !dropped {
+            *self.header_mut() = old_header;
+        }
+
+        dropped
+    }
+
+    fn upgrade(&mut self) {
+        let old_header = *self.header();
+        let swapped = std::mem::take(self);
+        *self = match swapped {
+            Node::Node4(n4) => Node::Node16(n4.upgrade()),
+            Node::Node16(n16) => Node::Node48(n16.upgrade()),
+            Node::Node48(n48) => Node::Node256(n48.upgrade()),
+            Node::Node256(_) => unreachable!(),
+            Node::None => unreachable!(),
+            Node::Value(_) => unreachable!(),
+        };
+        *self.header_mut() = old_header;
+    }
+
+    fn node_iter<'a>(&'a self) -> NodeIter<'a, V> {
+        let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> = match self {
+            Node::Node4(n4) => Box::new(n4.iter()),
+            Node::Node16(n16) => Box::new(n16.iter()),
+            Node::Node48(n48) => Box::new(n48.iter()),
+            Node::Node256(n256) => Box::new(n256.iter()),
+
+            // this is only an iterator over nodes, not leaf values
+            Node::None => Box::new([].into_iter()),
+            Node::Value(_) => Box::new([].into_iter()),
+        };
+
+        NodeIter {
+            node: self,
+            children,
+        }
+    }
+}
+
+
 #[derive(Debug, Clone)]
 struct Node4<V> {
     header: Header,
@@ -1039,250 +1284,6 @@ impl<V> Default for Node256<V> {
                 Node::None, Node::None, Node::None, Node::None,
                 Node::None, Node::None, Node::None, Node::None,
             ],
-        }
-    }
-}
-
-impl<V> Node<V> {
-    // returns true if this node went from Node4 to None
-    fn prune(&mut self, partial_path: &[u8]) -> bool {
-        let prefix = self.prefix();
-
-        assert!(partial_path.starts_with(prefix));
-
-        if partial_path.len() > prefix.len() + 1 {
-            let byte = partial_path[prefix.len()];
-            let subpath = &partial_path[prefix.len() + 1..];
-
-            let (_, child) = self.child_mut(byte, false, false).expect(
-                "prune may only be called with \
-                freshly removed keys with a full \
-                ancestor chain still in-place."
-            );
-
-            let child_shrunk = child.prune(subpath);
-            if child_shrunk {
-                let children: &mut u16 = &mut self.header_mut().children;
-                *children = children.checked_sub(1).unwrap();
-
-                if let Node::Node48(n48) = self {
-                    n48.child_index[byte as usize] = 255;
-                }
-            }
-        }
-
-        self.shrink_to_fit()
-    }
-
-    fn truncate_prefix(&mut self, partial_path: &[u8]) {
-        // println!("truncating prefix");
-        // expand path at shared prefix
-        //println!("chopping off a prefix at node {:?} since our partial path is {:?}", cursor.header(), partial_path);
-        let prefix = self.prefix();
-
-        let shared_bytes = partial_path
-            .iter()
-            .zip(prefix.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-
-        // println!("truncated node has path of len {} with a reduction of {}", shared_bytes, prefix.len() - shared_bytes);
-        let mut new_node4: Box<Node4<V>> = Box::default();
-        new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
-        new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
-
-        let new_node = Node::Node4(new_node4);
-
-        assert!(prefix.starts_with(new_node.prefix()));
-
-        let mut old_cursor = std::mem::replace(self, new_node);
-
-        let old_cursor_header = old_cursor.header_mut();
-        let old_cursor_new_child_byte = old_cursor_header.path[shared_bytes];
-
-        // we add +1 because we must account for the extra byte
-        // reduced from the node's fan-out itself.
-        old_cursor_header.path.rotate_left(shared_bytes + 1);
-        old_cursor_header.path_len = old_cursor_header
-            .path_len
-            .checked_sub(u8::try_from(shared_bytes + 1).unwrap())
-            .unwrap();
-
-        let (_, child) = self
-            .child_mut(old_cursor_new_child_byte, true, false)
-            .unwrap();
-        *child = old_cursor;
-        child.assert_size();
-
-        self.header_mut().children = 1;
-    }
-
-    #[inline]
-    fn is_none(&self) -> bool {
-        matches!(self, Node::None)
-    }
-
-    fn assert_size(&self) {
-        debug_assert_eq!(
-            {
-                let slots: &[Node<V>] = match self {
-                    Node::Node4(n4) => &n4.slots,
-                    Node::Node16(n16) => &n16.slots,
-                    Node::Node48(n48) => &n48.slots,
-                    Node::Node256(n256) => &n256.slots,
-                    _ => &[],
-                };
-                slots.iter().filter(|s| !s.is_none()).count()
-            },
-            self.len(),
-        )
-    }
-
-    fn is_full(&self) -> bool {
-        match self {
-            Node::Node4(_) => 4 == self.len(),
-            Node::Node16(_) => 16 == self.len(),
-            Node::Node48(_) => 48 == self.len(),
-            Node::Node256(_) => 256 == self.len(),
-            _ => unreachable!(),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.header().children as usize
-    }
-
-    fn header(&self) -> &Header {
-        match self {
-            Node::Node4(n4) => &n4.header,
-            Node::Node16(n16) => &n16.header,
-            Node::Node48(n48) => &n48.header,
-            Node::Node256(n256) => &n256.header,
-            Node::None => &NONE_HEADER,
-            Node::Value(_) => &VALUE_HEADER,
-        }
-    }
-
-    fn header_mut(&mut self) -> &mut Header {
-        match self {
-            Node::Node4(n4) => &mut n4.header,
-            Node::Node16(n16) => &mut n16.header,
-            Node::Node48(n48) => &mut n48.header,
-            Node::Node256(n256) => &mut n256.header,
-            _ => unreachable!(),
-        }
-    }
-
-    fn prefix(&self) -> &[u8] {
-        let header = self.header();
-        &header.path[..header.path_len as usize]
-    }
-
-    fn child(&self, byte: u8) -> Option<&Node<V>> {
-        match self {
-            Node::Node4(n4) => n4.child(byte),
-            Node::Node16(n16) => n16.child(byte),
-            Node::Node48(n48) => n48.child(byte),
-            Node::Node256(n256) => n256.child(byte),
-            Node::None => None,
-            Node::Value(_) => unreachable!(),
-        }
-    }
-
-    fn child_mut(
-        &mut self,
-        byte: u8,
-        is_add: bool,
-        clear_child_index: bool,
-    ) -> Option<(&mut u16, &mut Node<V>)> {
-        // TODO this is gross
-        if self.child(byte).is_none() {
-            if !is_add {
-                return None;
-            }
-            if self.is_full() {
-                self.upgrade()
-            }
-        }
-
-        Some(match self {
-            Node::Node4(n4) => n4.child_mut(byte),
-            Node::Node16(n16) => n16.child_mut(byte),
-            Node::Node48(n48) => n48.child_mut(byte, clear_child_index),
-            Node::Node256(n256) => n256.child_mut(byte),
-            Node::None => unreachable!(),
-            Node::Value(_) => unreachable!(),
-        })
-    }
-
-    fn should_shrink(&self) -> bool {
-        match (self, self.len()) {
-            (Node::Node4(_), 0) |
-            (Node::Node16(_), 4) |
-            (Node::Node48(_), 16) |
-            (Node::Node256(_), 48) => true,
-            (_, _) => false,
-        }
-    }
-
-    fn shrink_to_fit(&mut self) -> bool {
-        if !self.should_shrink() {
-            return false;
-        }
-
-        let old_header = *self.header();
-        let children = old_header.children;
-
-        let mut dropped = false;
-        let swapped = std::mem::take(self);
-
-        *self = match (swapped, children) {
-            (Node::Node4(_), 0) => {
-                dropped = true;
-                Node::None
-            },
-            (Node::Node16(n16), 4) => Node::Node4(n16.downgrade()),
-            (Node::Node48(n48), 16) => Node::Node16(n48.downgrade()),
-            (Node::Node256(n256), 48) => Node::Node48(n256.downgrade()),
-            (_, _) => unreachable!(),
-        };
-
-        if !dropped {
-            *self.header_mut() = old_header;
-        }
-
-        dropped
-    }
-
-    fn upgrade(&mut self) {
-        let old_header = *self.header();
-        let swapped = std::mem::take(self);
-        *self = match swapped {
-            Node::Node4(n4) => Node::Node16(n4.upgrade()),
-            Node::Node16(n16) => Node::Node48(n16.upgrade()),
-            Node::Node48(n48) => Node::Node256(n48.upgrade()),
-            Node::Node256(_) => unreachable!(),
-            Node::None => unreachable!(),
-            Node::Value(_) => unreachable!(),
-        };
-        *self.header_mut() = old_header;
-    }
-
-    fn node_iter<'a>(&'a self) -> NodeIter<'a, V> {
-        let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> = match self {
-            Node::Node4(n4) => Box::new(n4.iter()),
-            Node::Node16(n16) => Box::new(n16.iter()),
-            Node::Node48(n48) => Box::new(n48.iter()),
-            Node::Node256(n256) => Box::new(n256.iter()),
-
-            // this is only an iterator over nodes, not leaf values
-            Node::None => Box::new([].into_iter()),
-            Node::Value(_) => Box::new([].into_iter()),
-        };
-
-        NodeIter {
-            node: self,
-            children,
         }
     }
 }
