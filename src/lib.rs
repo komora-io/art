@@ -232,7 +232,7 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
 }
 
 #[cfg(target_pointer_width = "64")]
-const fn size_tests() {
+const fn _size_tests() {
     use std::mem::size_of;
     let _: [u8; 8] = [0; size_of::<Node<()>>()];
     let _: [u8; 16] = [0; size_of::<Header>()];
