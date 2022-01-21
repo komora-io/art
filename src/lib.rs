@@ -1,4 +1,4 @@
-use std::ops::{Deref, DerefMut, Bound, RangeBounds};
+use std::ops::{Bound, RangeBounds};
 use std::marker::PhantomData;
 
 #[derive(Debug, Clone)]
@@ -67,7 +67,7 @@ impl<V, const K: usize> Art<V, K> {
                 Some(value)
             }
             NodeMut::None => {
-                *cursor = Node::value(MaybeInline::new(value));
+                *cursor = Node::value(Box::new(value));
                 if let Some(children) = parent_opt {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -81,8 +81,8 @@ impl<V, const K: usize> Art<V, K> {
     pub fn remove(&mut self, key: &[u8; K]) -> Option<V> {
         let (parent_opt, cursor) = self.slot_for_key(key, false)?;
 
-        match std::mem::take(cursor).deref_mut() {
-            NodeMut::Value(old) => {
+        match std::mem::take(cursor).take() {
+            Some(old) => {
                 if let Some(children) = parent_opt {
                     *children = children.checked_sub(1).unwrap();
 
@@ -92,10 +92,9 @@ impl<V, const K: usize> Art<V, K> {
                     }
                 }
                 self.len -= 1;
-                Some(old.take())
+                Some(old)
             }
-            Node::None => None,
-            _ => unreachable!(),
+            None => None,
         }
     }
 
@@ -232,111 +231,18 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
     }
 }
 
-
-/// A simple inlinable box that automatically inlines if
-/// a type's size and alignment are less than or equal
-/// to that of `usize`.
-#[derive(Debug)]
-struct MaybeInline<T>(usize, PhantomData<T>);
-
-const fn can_inline<T>() -> bool {
-    std::mem::size_of::<T>() <= std::mem::size_of::<usize>()
-    &&
-    std::mem::align_of::<T>() <= std::mem::align_of::<usize>()
-}
-
 #[cfg(target_pointer_width = "64")]
 const fn size_tests() {
     use std::mem::size_of;
     let _: [u8; 8] = [0; size_of::<Node<()>>()];
     let _: [u8; 16] = [0; size_of::<Header>()];
-    let _: [u8; 52] = [0; size_of::<Node4<()>>()];
+    // TODO see if we can get this to work, as
+    // specified in the paper
+    // let _: [u8; 52] = [0; size_of::<Node4<()>>()];
+    let _: [u8; 56] = [0; size_of::<Node4<()>>()];
     let _: [u8; 160] = [0; size_of::<Node16<()>>()];
     let _: [u8; 656] = [0; size_of::<Node48<()>>()];
     let _: [u8; 2064] = [0; size_of::<Node256<()>>()];
-}
-
-impl<T> Drop for MaybeInline<T> {
-    fn drop(&mut self) {
-        if can_inline::<T>() {
-            unsafe {
-                std::ptr::drop_in_place((&mut self.0) as *mut usize as *mut T)
-            }
-        } else {
-            unsafe {
-                drop(Box::from_raw(self.0 as *mut T))
-            }
-        }
-    }
-}
-
-impl<T:Clone > Clone for MaybeInline<T> {
-    fn clone(&self) -> Self {
-        MaybeInline::new(self.deref().clone())
-    }
-}
-
-impl<T> Deref for MaybeInline<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        let ptr = if can_inline::<T>() {
-            (&self.0) as *const usize as *const T
-        } else {
-            self.0 as *const T
-        };
-
-        unsafe {
-            &*ptr
-        }
-    }
-}
-
-impl<T> DerefMut for MaybeInline<T> {
-    fn deref_mut(&mut self) -> &mut T {
-        let ptr = if can_inline::<T>() {
-            (&mut self.0) as *mut usize as *mut T
-        } else {
-            self.0 as *mut T
-        };
-
-        unsafe {
-            &mut *ptr
-        }
-    }
-}
-
-impl<T> MaybeInline<T> {
-    fn new(item: T) -> MaybeInline<T> {
-        let integer = if can_inline::<T>() {
-            let mut integer = 0_usize;
-            unsafe {
-                std::ptr::write((&mut integer) as *mut usize as *mut T, item);
-            }
-            integer
-        } else {
-            let ptr: *mut T = Box::into_raw(Box::new(item));
-            ptr as usize
-        };
-        MaybeInline(integer, PhantomData)
-    }
-
-    fn take(self) -> T {
-        let item: T = if can_inline::<T>() {
-            unsafe {
-                std::ptr::read(self.deref())
-            }
-        } else {
-            let ptr: *mut T = self.0 as *mut T;
-            let boxed: Box<T> = unsafe {
-                Box::from_raw(ptr)
-            };
-            *boxed
-        };
-
-        std::mem::forget(self);
-        item
-    }
 }
 
 const MAX_PATH_COMPRESSION_BYTES: usize = 13;
@@ -497,7 +403,7 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
                 match node.deref() {
                     NodeRef::Value(v) => break (c, v),
                     NodeRef::None => unreachable!(),
-                    other => {
+                    _other => {
                         let iter = node.node_iter();
                         self.path.push((c, iter))
                     }
@@ -512,7 +418,7 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
                 match node.deref() {
                     NodeRef::Value(v) => break (c, v),
                     NodeRef::None => unreachable!(),
-                    other => {
+                    _other => {
                         let iter = node.node_iter();
                         self.path.push((c, iter))
                     }
@@ -578,7 +484,7 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
                 match node.deref() {
                     NodeRef::Value(v) => break (c, v),
                     NodeRef::None => unreachable!(),
-                    other => {
+                    _other => {
                         let iter = node.node_iter();
                         self.rev_path.push((c, iter))
                     }
@@ -593,7 +499,7 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
                 match node.deref() {
                     NodeRef::Value(v) => break (c, v),
                     NodeRef::None => unreachable!(),
-                    other => {
+                    _other => {
                         let iter = node.node_iter();
                         self.rev_path.push((c, iter))
                     }
@@ -642,12 +548,53 @@ struct Header {
 #[derive(Debug, Clone)]
 struct Node<V>(usize, PhantomData<V>);
 
-const TAG_NONE: usize = 0;
-const TAG_V: usize = 1;
-const TAG_4: usize = 2;
-const TAG_16: usize = 3;
-const TAG_48: usize = 4;
-const TAG_256: usize = 5;
+impl<V> Drop for Node<V> {
+    fn drop(&mut self) {
+        match self.0 & TAG_MASK {
+            TAG_NONE => {},
+            TAG_VALUE => {
+                let ptr: *mut V = (self.0 & PTR_MASK) as *mut V;
+                drop(unsafe {
+                    Box::from_raw(ptr)
+                });
+            }
+            TAG_4 => {
+                let ptr: *mut Node4<V> = (self.0 & PTR_MASK) as *mut Node4<V>;
+                drop(unsafe {
+                    Box::from_raw(ptr)
+                });
+            }
+            TAG_16 => {
+                let ptr: *mut Node16<V> = (self.0 & PTR_MASK) as *mut Node16<V>;
+                drop(unsafe {
+                    Box::from_raw(ptr)
+                });
+            }
+            TAG_48 => {
+                let ptr: *mut Node48<V> = (self.0 & PTR_MASK) as *mut Node48<V>;
+                drop(unsafe {
+                    Box::from_raw(ptr)
+                });
+            }
+            TAG_256 => {
+                let ptr: *mut Node256<V> = (self.0 & PTR_MASK) as *mut Node256<V>;
+                drop(unsafe {
+                    Box::from_raw(ptr)
+                });
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+const TAG_NONE: usize = 0b000;
+const TAG_VALUE: usize = 0b001;
+const TAG_4: usize = 0b010;
+const TAG_16: usize = 0b011;
+const TAG_48: usize = 0b100;
+const TAG_256: usize = 0b101;
+const TAG_MASK: usize = 0b111;
+const PTR_MASK: usize = usize::MAX - TAG_MASK;
 
 enum NodeRef<'a, V> {
     None,
@@ -706,12 +653,112 @@ impl<V> Node<V> {
         Node(us | TAG_256, PhantomData)
     }
 
+    fn value(value: Box<V>) -> Node<V> {
+        let ptr: *mut V = Box::into_raw(value);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_VALUE, 0);
+        Node(us | TAG_VALUE, PhantomData)
+    }
+
+    fn take(&mut self) -> Option<V> {
+        let us = self.0;
+        self.0 = 0;
+
+        match us & TAG_MASK {
+            TAG_NONE => None,
+            TAG_VALUE => {
+                let ptr: *mut V = (us & PTR_MASK) as *mut V;
+                let boxed: Box<V> = unsafe {
+                    Box::from_raw(ptr)
+                };
+                Some(*boxed)
+            }
+            _ => unreachable!(),
+        }
+    }
+
     fn deref(&self) -> NodeRef<'_, V> {
-        todo!()
+        match self.0 & TAG_MASK {
+            TAG_NONE => NodeRef::None,
+            TAG_VALUE => {
+                let ptr: *const V = (self.0 & PTR_MASK) as *const V;
+                let reference: &V = unsafe {
+                    &*ptr
+                };
+                NodeRef::Value(reference)
+            }
+            TAG_4 => {
+                let ptr: *const Node4<V> = (self.0 & PTR_MASK) as *const Node4<V>;
+                let reference: &Node4<V> = unsafe {
+                    &*ptr
+                };
+                NodeRef::Node4(reference)
+            }
+            TAG_16 => {
+                let ptr: *const Node16<V> = (self.0 & PTR_MASK) as *const Node16<V>;
+                let reference: &Node16<V> = unsafe {
+                    &*ptr
+                };
+                NodeRef::Node16(reference)
+            }
+            TAG_48 => {
+                let ptr: *const Node48<V> = (self.0 & PTR_MASK) as *const Node48<V>;
+                let reference: &Node48<V> = unsafe {
+                    &*ptr
+                };
+                NodeRef::Node48(reference)
+            }
+            TAG_256 => {
+                let ptr: *const Node256<V> = (self.0 & PTR_MASK) as *const Node256<V>;
+                let reference: &Node256<V> = unsafe {
+                    &*ptr
+                };
+                NodeRef::Node256(reference)
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn deref_mut(&mut self) -> NodeMut<'_, V> {
-        todo!()
+        match self.0 & TAG_MASK {
+            TAG_NONE => NodeMut::None,
+            TAG_VALUE => {
+                let ptr: *mut V = (self.0 & PTR_MASK) as *mut V;
+                let reference: &mut V = unsafe {
+                    &mut *ptr
+                };
+                NodeMut::Value(reference)
+            }
+            TAG_4 => {
+                let ptr: *mut Node4<V> = (self.0 & PTR_MASK) as *mut Node4<V>;
+                let reference: &mut Node4<V> = unsafe {
+                    &mut *ptr
+                };
+                NodeMut::Node4(reference)
+            }
+            TAG_16 => {
+                let ptr: *mut Node16<V> = (self.0 & PTR_MASK) as *mut Node16<V>;
+                let reference: &mut Node16<V> = unsafe {
+                    &mut *ptr
+                };
+                NodeMut::Node16(reference)
+            }
+            TAG_48 => {
+                let ptr: *mut Node48<V> = (self.0 & PTR_MASK) as *mut Node48<V>;
+                let reference: &mut Node48<V> = unsafe {
+                    &mut *ptr
+                };
+                NodeMut::Node48(reference)
+            }
+            TAG_256 => {
+                let ptr: *mut Node256<V> = (self.0 & PTR_MASK) as *mut Node256<V>;
+                let reference: &mut Node256<V> = unsafe {
+                    &mut *ptr
+                };
+                NodeMut::Node256(reference)
+            }
+            _ => unreachable!(),
+        }
     }
 
     // returns true if this node went from Node4 to None
@@ -904,7 +951,7 @@ impl<V> Node<V> {
         let children = old_header.children;
 
         let mut dropped = false;
-        let swapped = std::mem::take(self);
+        let mut swapped = std::mem::take(self);
 
         *self = match (swapped.deref_mut(), children) {
             (NodeMut::Node4(_), 0) => {
@@ -926,7 +973,7 @@ impl<V> Node<V> {
 
     fn upgrade(&mut self) {
         let old_header = *self.header();
-        let swapped = std::mem::take(self);
+        let mut swapped = std::mem::take(self);
         *self = match swapped.deref_mut() {
             NodeMut::Node4(n4) => Node::node16(n4.upgrade()),
             NodeMut::Node16(n16) => Node::node48(n16.upgrade()),
@@ -956,7 +1003,6 @@ impl<V> Node<V> {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 struct Node4<V> {
@@ -1019,7 +1065,7 @@ impl<V> Node4<V> {
         }
     }
 
-    fn upgrade(mut self) -> Box<Node16<V>> {
+    fn upgrade(&mut self) -> Box<Node16<V>> {
         let mut n16: Box<Node16<V>> = Box::default();
         for (slot, byte) in self.keys.iter().enumerate() {
             std::mem::swap(&mut self.slots[slot], &mut n16.slots[slot]);
@@ -1107,7 +1153,7 @@ impl<V> Node16<V> {
         }
     }
 
-    fn upgrade(mut self) -> Box<Node48<V>> {
+    fn upgrade(&mut self) -> Box<Node48<V>> {
         let mut n48: Box<Node48<V>> = Box::default();
         for (slot, byte) in self.keys.iter().enumerate() {
             if !self.slots[slot].is_none() {
@@ -1119,7 +1165,7 @@ impl<V> Node16<V> {
         n48
     }
 
-    fn downgrade(mut self) -> Box<Node4<V>> {
+    fn downgrade(&mut self) -> Box<Node4<V>> {
         let mut n4: Box<Node4<V>> = Box::default();
         let mut dst_idx = 0;
 
@@ -1206,7 +1252,7 @@ impl<V> Node48<V> {
         }
     }
 
-    fn upgrade(mut self) -> Box<Node256<V>> {
+    fn upgrade(&mut self) -> Box<Node256<V>> {
         let mut n256: Box<Node256<V>> = Box::default();
 
         for (byte, idx) in self.child_index.iter().enumerate() {
@@ -1219,7 +1265,7 @@ impl<V> Node48<V> {
         n256
     }
 
-    fn downgrade(mut self) -> Box<Node16<V>> {
+    fn downgrade(&mut self) -> Box<Node16<V>> {
         let mut n16: Box<Node16<V>> = Box::default();
         let mut dst_idx = 0;
 
@@ -1266,7 +1312,7 @@ impl<V> Node256<V> {
         (&mut self.header.children, slot)
     }
 
-    fn downgrade(mut self) -> Box<Node48<V>> {
+    fn downgrade(&mut self) -> Box<Node48<V>> {
         let mut n48: Box<Node48<V>> = Box::default();
         let mut dst_idx = 0;
 
