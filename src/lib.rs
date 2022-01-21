@@ -1,5 +1,6 @@
 use std::ops::{Bound, RangeBounds};
 use std::marker::PhantomData;
+use std::mem::size_of;
 
 #[derive(Debug, Clone)]
 pub struct Art<V, const K: usize> {
@@ -233,7 +234,6 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
 
 #[cfg(target_pointer_width = "64")]
 const fn _size_tests() {
-    use std::mem::size_of;
     let _: [u8; 8] = [0; size_of::<Node<()>>()];
     let _: [u8; 16] = [0; size_of::<Header>()];
     // TODO see if we can get this to work, as
@@ -656,7 +656,11 @@ impl<V> Node<V> {
     fn value(value: Box<V>) -> Node<V> {
         let ptr: *mut V = Box::into_raw(value);
         let us = ptr as usize;
-        assert_eq!(us & TAG_VALUE, 0);
+        if size_of::<V>() > 0 {
+            assert_eq!(us & TAG_VALUE, 0);
+        } else {
+            assert_eq!(ptr, std::ptr::NonNull::dangling().as_ptr());
+        }
         Node(us | TAG_VALUE, PhantomData)
     }
 
@@ -667,7 +671,11 @@ impl<V> Node<V> {
         match us & TAG_MASK {
             TAG_NONE => None,
             TAG_VALUE => {
-                let ptr: *mut V = (us & PTR_MASK) as *mut V;
+                let ptr: *mut V = if size_of::<V>() > 0 {
+                    (us & PTR_MASK) as *mut V
+                } else {
+                    std::ptr::NonNull::dangling().as_ptr()
+                };
                 let boxed: Box<V> = unsafe {
                     Box::from_raw(ptr)
                 };
@@ -681,7 +689,11 @@ impl<V> Node<V> {
         match self.0 & TAG_MASK {
             TAG_NONE => NodeRef::None,
             TAG_VALUE => {
-                let ptr: *const V = (self.0 & PTR_MASK) as *const V;
+                let ptr: *const V = if size_of::<V>() > 0 {
+                    (self.0 & PTR_MASK) as *const V
+                } else {
+                    std::ptr::NonNull::dangling().as_ptr()
+                };
                 let reference: &V = unsafe {
                     &*ptr
                 };
@@ -723,7 +735,11 @@ impl<V> Node<V> {
         match self.0 & TAG_MASK {
             TAG_NONE => NodeMut::None,
             TAG_VALUE => {
-                let ptr: *mut V = (self.0 & PTR_MASK) as *mut V;
+                let ptr: *mut V = if size_of::<V>() > 0 {
+                    (self.0 & PTR_MASK) as *mut V
+                } else {
+                    std::ptr::NonNull::dangling().as_ptr()
+                };
                 let reference: &mut V = unsafe {
                     &mut *ptr
                 };
