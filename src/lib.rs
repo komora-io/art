@@ -1,9 +1,11 @@
 use std::ops::{Deref, DerefMut, Bound, RangeBounds};
 
+/// An Adaptive Radix Trie (ART) for fixed-length
+/// keys.
 #[derive(Debug, Clone)]
-pub struct Art<V, const K: usize> {
+pub struct Art<ValueType, const KEY_LENGTH: usize> {
     len: usize,
-    root: Node<V>,
+    root: Node<ValueType>,
 }
 
 impl<V, const K: usize> Default for Art<V, K> {
