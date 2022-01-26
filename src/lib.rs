@@ -1,11 +1,22 @@
 use std::ops::{Deref, DerefMut, Bound, RangeBounds};
+use std::fmt;
 
 /// An Adaptive Radix Trie (ART) for fixed-length
 /// keys.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Art<ValueType, const KEY_LENGTH: usize> {
     len: usize,
     root: Node<ValueType>,
+}
+
+impl <V: fmt::Debug, const K: usize> fmt::Debug for Art<V, K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Art ")?;
+        f.debug_map()
+            .entries(self.iter())
+            .finish()?;
+        Ok(())
+    }
 }
 
 impl<V, const K: usize> Default for Art<V, K> {
