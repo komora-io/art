@@ -1,5 +1,12 @@
-use std::ops::{Deref, DerefMut, Bound, RangeBounds};
 use std::fmt;
+use std::marker::PhantomData;
+use std::mem::size_of;
+use std::ops::{Bound, RangeBounds};
+
+// This is important due to the use of tagged pointers
+// in the low 3 bits of the node addresses.
+#[repr(align(8))]
+struct MinAlign<T>(T);
 
 /// An Adaptive Radix Trie (ART) for fixed-length
 /// keys.
@@ -9,12 +16,23 @@ pub struct Art<ValueType, const KEY_LENGTH: usize> {
     root: Node<ValueType>,
 }
 
-impl <V: fmt::Debug, const K: usize> fmt::Debug for Art<V, K> {
+impl<V, const K: usize> FromIterator<([u8; K], V)> for Art<V, K> {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = ([u8; K], V)>,
+    {
+        let mut art = Art::new();
+        for (k, v) in iter {
+            art.insert(k, v);
+        }
+        art
+    }
+}
+
+impl<V: fmt::Debug, const K: usize> fmt::Debug for Art<V, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Art ")?;
-        f.debug_map()
-            .entries(self.iter())
-            .finish()?;
+        f.debug_map().entries(self.iter()).finish()?;
         Ok(())
     }
 }
@@ -23,7 +41,7 @@ impl<V, const K: usize> Default for Art<V, K> {
     fn default() -> Art<V, K> {
         Art {
             len: 0,
-            root: Node::None,
+            root: Node::none(),
         }
     }
 }
@@ -63,7 +81,7 @@ impl<V, const K: usize> Art<V, K> {
         // function is called
         Art {
             len: 0,
-            root: Node::None,
+            root: Node::none(),
         }
     }
 
@@ -73,13 +91,13 @@ impl<V, const K: usize> Art<V, K> {
 
     pub fn insert(&mut self, key: [u8; K], mut value: V) -> Option<V> {
         let (parent_opt, cursor) = self.slot_for_key(&key, true).unwrap();
-        match cursor {
-            Node::Value(ref mut old) => {
+        match cursor.deref_mut() {
+            NodeMut::Value(ref mut old) => {
                 std::mem::swap(&mut **old, &mut value);
                 Some(value)
             }
-            Node::None => {
-                *cursor = Node::Value(InlinableBox::new(value));
+            NodeMut::None => {
+                *cursor = Node::value(value);
                 if let Some(children) = parent_opt {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -93,21 +111,24 @@ impl<V, const K: usize> Art<V, K> {
     pub fn remove(&mut self, key: &[u8; K]) -> Option<V> {
         let (parent_opt, cursor) = self.slot_for_key(key, false)?;
 
-        match std::mem::take(cursor) {
-            Node::Value(old) => {
+        match std::mem::take(cursor).take() {
+            Some(old) => {
                 if let Some(children) = parent_opt {
                     *children = children.checked_sub(1).unwrap();
 
-                    if *children == 48 || *children == 16
-                        || *children == 4 || *children == 0 {
+                    if *children == 48
+                        || *children == 16
+                        || *children == 4
+                        || *children == 1
+                        || *children == 0
+                    {
                         self.prune(key);
                     }
                 }
                 self.len -= 1;
-                Some(old.take())
+                Some(old)
             }
-            Node::None => None,
-            _ => unreachable!(),
+            None => None,
         }
     }
 
@@ -146,7 +167,7 @@ impl<V, const K: usize> Art<V, K> {
                 }
                 // we need to create intermediate nodes before
                 // populating the value for this insert
-                *cursor = Node::Node1(Box::default());
+                *cursor = Node::node1(Box::default());
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -210,9 +231,9 @@ impl<V, const K: usize> Art<V, K> {
             k = &k[prefix.len() + 1..];
         }
 
-        match cursor {
-            &Node::Value(ref v) => return Some(v),
-            &Node::None => return None,
+        match cursor.deref() {
+            NodeRef::Value(ref v) => return Some(v),
+            NodeRef::None => return None,
             _ => unreachable!(),
         }
     }
@@ -244,114 +265,20 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
     }
 }
 
-
-/// A simple inlinable box that automatically inlines if
-/// a type's size and alignment are less than or equal
-/// to that of `usize`.
-#[derive(Debug)]
-struct InlinableBox<T>(usize, std::marker::PhantomData<T>);
-
-const fn can_inline<T>() -> bool {
-    std::mem::size_of::<T>() <= std::mem::size_of::<usize>()
-    &&
-    std::mem::align_of::<T>() <= std::mem::align_of::<usize>()
+#[cfg(target_pointer_width = "64")]
+const fn _size_and_alignment_tests() {
+    let _: [u8; 2_u32.pow(PTR_MASK.trailing_zeros()) as usize] =
+        [0; std::mem::align_of::<MinAlign<()>>()];
+    let _: [u8; 8] = [0; size_of::<Node<()>>()];
+    let _: [u8; 12] = [0; size_of::<Header>()];
+    let _: [u8; 24] = [0; size_of::<Node1<()>>()];
+    let _: [u8; 48] = [0; size_of::<Node4<()>>()];
+    let _: [u8; 160] = [0; size_of::<Node16<()>>()];
+    let _: [u8; 656] = [0; size_of::<Node48<()>>()];
+    let _: [u8; 2064] = [0; size_of::<Node256<()>>()];
 }
 
-const fn _size_test() {
-    #[repr(align(1024))]
-    struct Big([u8; 4096]);
-
-    let _: [u8; std::mem::size_of::<usize>()] = [0; std::mem::size_of::<InlinableBox<()>>()];
-    let _: [u8; std::mem::align_of::<usize>()] = [0; std::mem::align_of::<InlinableBox<()>>()];
-
-    let _: [u8; std::mem::size_of::<usize>()] = [0; std::mem::size_of::<InlinableBox<Big>>()];
-    let _: [u8; std::mem::align_of::<usize>()] = [0; std::mem::align_of::<InlinableBox<Big>>()];
-}
-
-impl<T> Drop for InlinableBox<T> {
-    fn drop(&mut self) {
-        if can_inline::<T>() {
-            unsafe {
-                std::ptr::drop_in_place((&mut self.0) as *mut usize as *mut T)
-            }
-        } else {
-            unsafe {
-                drop(Box::from_raw(self.0 as *mut T))
-            }
-        }
-    }
-}
-
-impl<T:Clone > Clone for InlinableBox<T> {
-    fn clone(&self) -> Self {
-        InlinableBox::new(self.deref().clone())
-    }
-}
-
-impl<T> Deref for InlinableBox<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        let ptr = if can_inline::<T>() {
-            (&self.0) as *const usize as *const T
-        } else {
-            self.0 as *const T
-        };
-
-        unsafe {
-            &*ptr
-        }
-    }
-}
-
-impl<T> DerefMut for InlinableBox<T> {
-    fn deref_mut(&mut self) -> &mut T {
-        let ptr = if can_inline::<T>() {
-            (&mut self.0) as *mut usize as *mut T
-        } else {
-            self.0 as *mut T
-        };
-
-        unsafe {
-            &mut *ptr
-        }
-    }
-}
-
-impl<T> InlinableBox<T> {
-    fn new(item: T) -> InlinableBox<T> {
-        let integer = if can_inline::<T>() {
-            let mut integer = 0_usize;
-            unsafe {
-                std::ptr::write((&mut integer) as *mut usize as *mut T, item);
-            }
-            integer
-        } else {
-            let ptr: *mut T = Box::into_raw(Box::new(item));
-            ptr as usize
-        };
-        InlinableBox(integer, std::marker::PhantomData)
-    }
-
-    fn take(self) -> T {
-        let item: T = if can_inline::<T>() {
-            unsafe {
-                std::ptr::read(self.deref())
-            }
-        } else {
-            let ptr: *mut T = self.0 as *mut T;
-            let boxed: Box<T> = unsafe {
-                Box::from_raw(ptr)
-            };
-            *boxed
-        };
-
-        std::mem::forget(self);
-        item
-    }
-}
-
-const MAX_PATH_COMPRESSION_BYTES: usize = 13;
+const MAX_PATH_COMPRESSION_BYTES: usize = 9;
 
 const NONE_HEADER: Header = Header {
     children: 0,
@@ -485,9 +412,9 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
             let finished = self.finished_0;
             let can_return = in_bounds && !finished;
             self.finished_0 = true;
-            match self.root.node {
-                &Node::Value(ref v) if can_return => return Some(([0; K], v)),
-                &Node::Value(_) | &Node::None => return None,
+            match self.root.node.deref() {
+                NodeRef::Value(ref v) if can_return => return Some(([0; K], v)),
+                NodeRef::Value(_) | NodeRef::None => return None,
                 _ => unreachable!(),
             }
         }
@@ -506,11 +433,11 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
                 if !next_c_bound.contains(&c) {
                     continue;
                 }
-                match node {
-                    Node::Value(v) => break (c, v),
-                    Node::None => unreachable!(),
-                    other => {
-                        let iter = other.node_iter();
+                match node.deref() {
+                    NodeRef::Value(v) => break (c, v),
+                    NodeRef::None => unreachable!(),
+                    _other => {
+                        let iter = node.node_iter();
                         self.path.push((c, iter))
                     }
                 }
@@ -521,11 +448,11 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
                     continue;
                 }
 
-                match node {
-                    Node::Value(v) => break (c, v),
-                    Node::None => unreachable!(),
-                    other => {
-                        let iter = other.node_iter();
+                match node.deref() {
+                    NodeRef::Value(v) => break (c, v),
+                    NodeRef::None => unreachable!(),
+                    _other => {
+                        let iter = node.node_iter();
                         self.path.push((c, iter))
                     }
                 }
@@ -565,9 +492,9 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
             let finished = self.finished_0;
             let can_return = in_bounds && !finished;
             self.finished_0 = true;
-            match self.root.node {
-                &Node::Value(ref v) if can_return => return Some(([0; K], v)),
-                &Node::Value(_) | &Node::None => return None,
+            match self.root.node.deref() {
+                NodeRef::Value(ref v) if can_return => return Some(([0; K], v)),
+                NodeRef::Value(_) | NodeRef::None => return None,
                 _ => unreachable!(),
             }
         }
@@ -587,11 +514,11 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
                     continue;
                 }
 
-                match node {
-                    Node::Value(v) => break (c, v),
-                    Node::None => unreachable!(),
-                    other => {
-                        let iter = other.node_iter();
+                match node.deref() {
+                    NodeRef::Value(v) => break (c, v),
+                    NodeRef::None => unreachable!(),
+                    _other => {
+                        let iter = node.node_iter();
                         self.rev_path.push((c, iter))
                     }
                 }
@@ -602,11 +529,11 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
                     continue;
                 }
 
-                match node {
-                    Node::Value(v) => break (c, v),
-                    Node::None => unreachable!(),
-                    other => {
-                        let iter = other.node_iter();
+                match node.deref() {
+                    NodeRef::Value(v) => break (c, v),
+                    NodeRef::None => unreachable!(),
+                    _other => {
+                        let iter = node.node_iter();
                         self.rev_path.push((c, iter))
                     }
                 }
@@ -650,25 +577,261 @@ struct Header {
     path_len: u8,
 }
 
-// TODO remove box, use tagged pointer + repr(align(8))
-#[derive(Debug, Clone)]
-enum Node<V> {
+struct Node<V>(usize, PhantomData<V>);
+
+impl<V: Clone> Clone for Node<V> {
+    fn clone(&self) -> Node<V> {
+        match self.deref() {
+            NodeRef::Node1(n1) => Node::node1(Box::new(n1.clone())),
+            NodeRef::Node4(n4) => Node::node4(Box::new(n4.clone())),
+            NodeRef::Node16(n16) => Node::node16(Box::new(n16.clone())),
+            NodeRef::Node48(n48) => Node::node48(Box::new(n48.clone())),
+            NodeRef::Node256(n256) => Node::node256(Box::new(n256.clone())),
+            NodeRef::None => Node::default(),
+            NodeRef::Value(v) => Node::value(v.clone()),
+        }
+    }
+}
+
+impl<V: fmt::Debug> fmt::Debug for Node<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Node")
+            .field("header", self.header())
+            .field("inner", &self.deref())
+            .finish()?;
+        Ok(())
+    }
+}
+
+impl<V> Drop for Node<V> {
+    fn drop(&mut self) {
+        match self.0 & TAG_MASK {
+            TAG_NONE => {}
+            TAG_VALUE => {
+                if size_of::<V>() > 0 {
+                    let ptr: *mut MinAlign<V> = if size_of::<V>() > 0 {
+                        (self.0 & PTR_MASK) as *mut MinAlign<V>
+                    } else {
+                        std::ptr::NonNull::dangling().as_ptr()
+                    };
+                    drop(unsafe { Box::from_raw(ptr) });
+                }
+            }
+            TAG_1 => {
+                let ptr: *mut Node1<V> = (self.0 & PTR_MASK) as *mut Node1<V>;
+                drop(unsafe { Box::from_raw(ptr) });
+            }
+            TAG_4 => {
+                let ptr: *mut Node4<V> = (self.0 & PTR_MASK) as *mut Node4<V>;
+                drop(unsafe { Box::from_raw(ptr) });
+            }
+            TAG_16 => {
+                let ptr: *mut Node16<V> = (self.0 & PTR_MASK) as *mut Node16<V>;
+                drop(unsafe { Box::from_raw(ptr) });
+            }
+            TAG_48 => {
+                let ptr: *mut Node48<V> = (self.0 & PTR_MASK) as *mut Node48<V>;
+                drop(unsafe { Box::from_raw(ptr) });
+            }
+            TAG_256 => {
+                let ptr: *mut Node256<V> = (self.0 & PTR_MASK) as *mut Node256<V>;
+                drop(unsafe { Box::from_raw(ptr) });
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+const TAG_NONE: usize = 0b000;
+const TAG_VALUE: usize = 0b001;
+const TAG_1: usize = 0b010;
+const TAG_4: usize = 0b011;
+const TAG_16: usize = 0b100;
+const TAG_48: usize = 0b101;
+const TAG_256: usize = 0b110;
+const TAG_MASK: usize = 0b111;
+const PTR_MASK: usize = usize::MAX - TAG_MASK;
+
+#[derive(Debug)]
+enum NodeRef<'a, V> {
     None,
-    Node1(Box<Node1<V>>),
-    Node4(Box<Node4<V>>),
-    Node16(Box<Node16<V>>),
-    Node48(Box<Node48<V>>),
-    Node256(Box<Node256<V>>),
-    Value(InlinableBox<V>),
+    Value(&'a V),
+    Node1(&'a Node1<V>),
+    Node4(&'a Node4<V>),
+    Node16(&'a Node16<V>),
+    Node48(&'a Node48<V>),
+    Node256(&'a Node256<V>),
+}
+
+enum NodeMut<'a, V> {
+    None,
+    Value(&'a mut V),
+    Node1(&'a mut Node1<V>),
+    Node4(&'a mut Node4<V>),
+    Node16(&'a mut Node16<V>),
+    Node48(&'a mut Node48<V>),
+    Node256(&'a mut Node256<V>),
 }
 
 impl<V> Default for Node<V> {
     fn default() -> Node<V> {
-        Node::None
+        Node::none()
     }
 }
 
 impl<V> Node<V> {
+    const fn none() -> Node<V> {
+        Node(TAG_NONE, PhantomData)
+    }
+
+    fn node1(n1: Box<Node1<V>>) -> Node<V> {
+        let ptr: *mut Node1<V> = Box::into_raw(n1);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_1, 0);
+        Node(us | TAG_1, PhantomData)
+    }
+
+    fn node4(n4: Box<Node4<V>>) -> Node<V> {
+        let ptr: *mut Node4<V> = Box::into_raw(n4);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_4, 0);
+        Node(us | TAG_4, PhantomData)
+    }
+
+    fn node16(n16: Box<Node16<V>>) -> Node<V> {
+        let ptr: *mut Node16<V> = Box::into_raw(n16);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_16, 0);
+        Node(us | TAG_16, PhantomData)
+    }
+
+    fn node48(n48: Box<Node48<V>>) -> Node<V> {
+        let ptr: *mut Node48<V> = Box::into_raw(n48);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_48, 0);
+        Node(us | TAG_48, PhantomData)
+    }
+
+    fn node256(n256: Box<Node256<V>>) -> Node<V> {
+        let ptr: *mut Node256<V> = Box::into_raw(n256);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_256, 0);
+        Node(us | TAG_256, PhantomData)
+    }
+
+    fn value(value: V) -> Node<V> {
+        let bx = Box::new(MinAlign(value));
+        let ptr: *mut MinAlign<V> = Box::into_raw(bx);
+        let us = ptr as usize;
+        if size_of::<V>() > 0 {
+            assert_eq!(us & TAG_VALUE, 0);
+        } else {
+            assert_eq!(ptr, std::ptr::NonNull::dangling().as_ptr());
+        }
+        Node(us | TAG_VALUE, PhantomData)
+    }
+
+    fn take(&mut self) -> Option<V> {
+        let us = self.0;
+        self.0 = 0;
+
+        match us & TAG_MASK {
+            TAG_NONE => None,
+            TAG_VALUE => {
+                let ptr: *mut MinAlign<V> = if size_of::<V>() > 0 {
+                    (us & PTR_MASK) as *mut MinAlign<V>
+                } else {
+                    std::ptr::NonNull::dangling().as_ptr()
+                };
+                let boxed: Box<MinAlign<V>> = unsafe { Box::from_raw(ptr) };
+                Some(boxed.0)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn deref(&self) -> NodeRef<'_, V> {
+        match self.0 & TAG_MASK {
+            TAG_NONE => NodeRef::None,
+            TAG_VALUE => {
+                let ptr: *const MinAlign<V> = if size_of::<V>() > 0 {
+                    (self.0 & PTR_MASK) as *const MinAlign<V>
+                } else {
+                    std::ptr::NonNull::dangling().as_ptr()
+                };
+                let reference: &V = unsafe { &(*ptr).0 };
+                NodeRef::Value(reference)
+            }
+            TAG_1 => {
+                let ptr: *const Node1<V> = (self.0 & PTR_MASK) as *const Node1<V>;
+                let reference: &Node1<V> = unsafe { &*ptr };
+                NodeRef::Node1(reference)
+            }
+            TAG_4 => {
+                let ptr: *const Node4<V> = (self.0 & PTR_MASK) as *const Node4<V>;
+                let reference: &Node4<V> = unsafe { &*ptr };
+                NodeRef::Node4(reference)
+            }
+            TAG_16 => {
+                let ptr: *const Node16<V> = (self.0 & PTR_MASK) as *const Node16<V>;
+                let reference: &Node16<V> = unsafe { &*ptr };
+                NodeRef::Node16(reference)
+            }
+            TAG_48 => {
+                let ptr: *const Node48<V> = (self.0 & PTR_MASK) as *const Node48<V>;
+                let reference: &Node48<V> = unsafe { &*ptr };
+                NodeRef::Node48(reference)
+            }
+            TAG_256 => {
+                let ptr: *const Node256<V> = (self.0 & PTR_MASK) as *const Node256<V>;
+                let reference: &Node256<V> = unsafe { &*ptr };
+                NodeRef::Node256(reference)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn deref_mut(&mut self) -> NodeMut<'_, V> {
+        match self.0 & TAG_MASK {
+            TAG_NONE => NodeMut::None,
+            TAG_VALUE => {
+                let ptr: *mut MinAlign<V> = if size_of::<V>() > 0 {
+                    (self.0 & PTR_MASK) as *mut MinAlign<V>
+                } else {
+                    std::ptr::NonNull::dangling().as_ptr()
+                };
+                let reference: &mut V = unsafe { &mut (*ptr).0 };
+                NodeMut::Value(reference)
+            }
+            TAG_1 => {
+                let ptr: *mut Node1<V> = (self.0 & PTR_MASK) as *mut Node1<V>;
+                let reference: &mut Node1<V> = unsafe { &mut *ptr };
+                NodeMut::Node1(reference)
+            }
+            TAG_4 => {
+                let ptr: *mut Node4<V> = (self.0 & PTR_MASK) as *mut Node4<V>;
+                let reference: &mut Node4<V> = unsafe { &mut *ptr };
+                NodeMut::Node4(reference)
+            }
+            TAG_16 => {
+                let ptr: *mut Node16<V> = (self.0 & PTR_MASK) as *mut Node16<V>;
+                let reference: &mut Node16<V> = unsafe { &mut *ptr };
+                NodeMut::Node16(reference)
+            }
+            TAG_48 => {
+                let ptr: *mut Node48<V> = (self.0 & PTR_MASK) as *mut Node48<V>;
+                let reference: &mut Node48<V> = unsafe { &mut *ptr };
+                NodeMut::Node48(reference)
+            }
+            TAG_256 => {
+                let ptr: *mut Node256<V> = (self.0 & PTR_MASK) as *mut Node256<V>;
+                let reference: &mut Node256<V> = unsafe { &mut *ptr };
+                NodeMut::Node256(reference)
+            }
+            _ => unreachable!(),
+        }
+    }
+
     // returns true if this node went from Node4 to None
     fn prune(&mut self, partial_path: &[u8]) -> bool {
         let prefix = self.prefix();
@@ -682,7 +845,7 @@ impl<V> Node<V> {
             let (_, child) = self.child_mut(byte, false, false).expect(
                 "prune may only be called with \
                 freshly removed keys with a full \
-                ancestor chain still in-place."
+                ancestor chain still in-place.",
             );
 
             let child_shrunk = child.prune(subpath);
@@ -690,7 +853,7 @@ impl<V> Node<V> {
                 let children: &mut u16 = &mut self.header_mut().children;
                 *children = children.checked_sub(1).unwrap();
 
-                if let Node::Node48(n48) = self {
+                if let NodeMut::Node48(n48) = self.deref_mut() {
                     n48.child_index[byte as usize] = 255;
                 }
             }
@@ -716,7 +879,7 @@ impl<V> Node<V> {
         new_node4.header.path[..shared_bytes].copy_from_slice(&prefix[..shared_bytes]);
         new_node4.header.path_len = u8::try_from(shared_bytes).unwrap();
 
-        let new_node = Node::Node4(new_node4);
+        let new_node = Node::node4(new_node4);
 
         assert!(prefix.starts_with(new_node.prefix()));
 
@@ -744,21 +907,21 @@ impl<V> Node<V> {
 
     #[inline]
     fn is_none(&self) -> bool {
-        matches!(self, Node::None)
+        self.0 == TAG_NONE
     }
 
     fn assert_size(&self) {
         debug_assert_eq!(
             {
-                if let Node::Node1(_) = self {
-                    debug_assert_eq!(self.len(), 1);
-                    return;
-                }
-                let slots: &[Node<V>] = match self {
-                    Node::Node4(n4) => &n4.slots,
-                    Node::Node16(n16) => &n16.slots,
-                    Node::Node48(n48) => &n48.slots,
-                    Node::Node256(n256) => &n256.slots,
+                let slots: &[Node<V>] = match self.deref() {
+                    NodeRef::Node1(_) => {
+                        debug_assert_eq!(self.len(), 1);
+                        return;
+                    }
+                    NodeRef::Node4(n4) => &n4.slots,
+                    NodeRef::Node16(n16) => &n16.slots,
+                    NodeRef::Node48(n48) => &n48.slots,
+                    NodeRef::Node256(n256) => &n256.slots,
                     _ => &[],
                 };
                 slots.iter().filter(|s| !s.is_none()).count()
@@ -768,12 +931,12 @@ impl<V> Node<V> {
     }
 
     fn is_full(&self) -> bool {
-        match self {
-            Node::Node1(_) => 1 == self.len(),
-            Node::Node4(_) => 4 == self.len(),
-            Node::Node16(_) => 16 == self.len(),
-            Node::Node48(_) => 48 == self.len(),
-            Node::Node256(_) => 256 == self.len(),
+        match self.deref() {
+            NodeRef::Node1(_) => 1 == self.len(),
+            NodeRef::Node4(_) => 4 == self.len(),
+            NodeRef::Node16(_) => 16 == self.len(),
+            NodeRef::Node48(_) => 48 == self.len(),
+            NodeRef::Node256(_) => 256 == self.len(),
             _ => unreachable!(),
         }
     }
@@ -783,24 +946,24 @@ impl<V> Node<V> {
     }
 
     fn header(&self) -> &Header {
-        match self {
-            Node::Node1(n1) => &n1.header,
-            Node::Node4(n4) => &n4.header,
-            Node::Node16(n16) => &n16.header,
-            Node::Node48(n48) => &n48.header,
-            Node::Node256(n256) => &n256.header,
-            Node::None => &NONE_HEADER,
-            Node::Value(_) => &VALUE_HEADER,
+        match self.deref() {
+            NodeRef::Node1(n1) => &n1.header,
+            NodeRef::Node4(n4) => &n4.header,
+            NodeRef::Node16(n16) => &n16.header,
+            NodeRef::Node48(n48) => &n48.header,
+            NodeRef::Node256(n256) => &n256.header,
+            NodeRef::None => &NONE_HEADER,
+            NodeRef::Value(_) => &VALUE_HEADER,
         }
     }
 
     fn header_mut(&mut self) -> &mut Header {
-        match self {
-            Node::Node1(n1) => &mut n1.header,
-            Node::Node4(n4) => &mut n4.header,
-            Node::Node16(n16) => &mut n16.header,
-            Node::Node48(n48) => &mut n48.header,
-            Node::Node256(n256) => &mut n256.header,
+        match self.deref_mut() {
+            NodeMut::Node1(n1) => &mut n1.header,
+            NodeMut::Node4(n4) => &mut n4.header,
+            NodeMut::Node16(n16) => &mut n16.header,
+            NodeMut::Node48(n48) => &mut n48.header,
+            NodeMut::Node256(n256) => &mut n256.header,
             _ => unreachable!(),
         }
     }
@@ -811,14 +974,14 @@ impl<V> Node<V> {
     }
 
     fn child(&self, byte: u8) -> Option<&Node<V>> {
-        match self {
-            Node::Node1(n1) => n1.child(byte),
-            Node::Node4(n4) => n4.child(byte),
-            Node::Node16(n16) => n16.child(byte),
-            Node::Node48(n48) => n48.child(byte),
-            Node::Node256(n256) => n256.child(byte),
-            Node::None => None,
-            Node::Value(_) => unreachable!(),
+        match self.deref() {
+            NodeRef::Node1(n1) => n1.child(byte),
+            NodeRef::Node4(n4) => n4.child(byte),
+            NodeRef::Node16(n16) => n16.child(byte),
+            NodeRef::Node48(n48) => n48.child(byte),
+            NodeRef::Node256(n256) => n256.child(byte),
+            NodeRef::None => None,
+            NodeRef::Value(_) => unreachable!(),
         }
     }
 
@@ -838,24 +1001,24 @@ impl<V> Node<V> {
             }
         }
 
-        Some(match self {
-            Node::Node1(n1) => n1.child_mut(byte),
-            Node::Node4(n4) => n4.child_mut(byte),
-            Node::Node16(n16) => n16.child_mut(byte),
-            Node::Node48(n48) => n48.child_mut(byte, clear_child_index),
-            Node::Node256(n256) => n256.child_mut(byte),
-            Node::None => unreachable!(),
-            Node::Value(_) => unreachable!(),
+        Some(match self.deref_mut() {
+            NodeMut::Node1(n1) => n1.child_mut(byte),
+            NodeMut::Node4(n4) => n4.child_mut(byte),
+            NodeMut::Node16(n16) => n16.child_mut(byte),
+            NodeMut::Node48(n48) => n48.child_mut(byte, clear_child_index),
+            NodeMut::Node256(n256) => n256.child_mut(byte),
+            NodeMut::None => unreachable!(),
+            NodeMut::Value(_) => unreachable!(),
         })
     }
 
     fn should_shrink(&self) -> bool {
-        match (self, self.len()) {
-            (Node::Node1(_), 0) |
-            (Node::Node4(_), 1) |
-            (Node::Node16(_), 4) |
-            (Node::Node48(_), 16) |
-            (Node::Node256(_), 48) => true,
+        match (self.deref(), self.len()) {
+            (NodeRef::Node1(_), 0)
+            | (NodeRef::Node4(_), 1)
+            | (NodeRef::Node16(_), 4)
+            | (NodeRef::Node48(_), 16)
+            | (NodeRef::Node256(_), 48) => true,
             (_, _) => false,
         }
     }
@@ -869,17 +1032,17 @@ impl<V> Node<V> {
         let children = old_header.children;
 
         let mut dropped = false;
-        let swapped = std::mem::take(self);
+        let mut swapped = std::mem::take(self);
 
-        *self = match (swapped, children) {
-            (Node::Node1(_), 0) => {
+        *self = match (swapped.deref_mut(), children) {
+            (NodeMut::Node1(_), 0) => {
                 dropped = true;
-                Node::None
-            },
-            (Node::Node4(n4), 1) => Node::Node1(n4.downgrade()),
-            (Node::Node16(n16), 4) => Node::Node4(n16.downgrade()),
-            (Node::Node48(n48), 16) => Node::Node16(n48.downgrade()),
-            (Node::Node256(n256), 48) => Node::Node48(n256.downgrade()),
+                Node::none()
+            }
+            (NodeMut::Node4(n4), 1) => Node::node1(n4.downgrade()),
+            (NodeMut::Node16(n16), 4) => Node::node4(n16.downgrade()),
+            (NodeMut::Node48(n48), 16) => Node::node16(n48.downgrade()),
+            (NodeMut::Node256(n256), 48) => Node::node48(n256.downgrade()),
             (_, _) => unreachable!(),
         };
 
@@ -892,31 +1055,32 @@ impl<V> Node<V> {
 
     fn upgrade(&mut self) {
         let old_header = *self.header();
-        let swapped = std::mem::take(self);
-        *self = match swapped {
-            Node::Node1(n1) => Node::Node4(n1.upgrade()),
-            Node::Node4(n4) => Node::Node16(n4.upgrade()),
-            Node::Node16(n16) => Node::Node48(n16.upgrade()),
-            Node::Node48(n48) => Node::Node256(n48.upgrade()),
-            Node::Node256(_) => unreachable!(),
-            Node::None => unreachable!(),
-            Node::Value(_) => unreachable!(),
+        let mut swapped = std::mem::take(self);
+        *self = match swapped.deref_mut() {
+            NodeMut::Node1(n1) => Node::node4(n1.upgrade()),
+            NodeMut::Node4(n4) => Node::node16(n4.upgrade()),
+            NodeMut::Node16(n16) => Node::node48(n16.upgrade()),
+            NodeMut::Node48(n48) => Node::node256(n48.upgrade()),
+            NodeMut::Node256(_) => unreachable!(),
+            NodeMut::None => unreachable!(),
+            NodeMut::Value(_) => unreachable!(),
         };
         *self.header_mut() = old_header;
     }
 
     fn node_iter<'a>(&'a self) -> NodeIter<'a, V> {
-        let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> = match self {
-            Node::Node1(n1) => Box::new(n1.iter()),
-            Node::Node4(n4) => Box::new(n4.iter()),
-            Node::Node16(n16) => Box::new(n16.iter()),
-            Node::Node48(n48) => Box::new(n48.iter()),
-            Node::Node256(n256) => Box::new(n256.iter()),
+        let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> =
+            match self.deref() {
+                NodeRef::Node1(n1) => Box::new(n1.iter()),
+                NodeRef::Node4(n4) => Box::new(n4.iter()),
+                NodeRef::Node16(n16) => Box::new(n16.iter()),
+                NodeRef::Node48(n48) => Box::new(n48.iter()),
+                NodeRef::Node256(n256) => Box::new(n256.iter()),
 
-            // this is only an iterator over nodes, not leaf values
-            Node::None => Box::new([].into_iter()),
-            Node::Value(_) => Box::new([].into_iter()),
-        };
+                // this is only an iterator over nodes, not leaf values
+                NodeRef::None => Box::new([].into_iter()),
+                NodeRef::Value(_) => Box::new([].into_iter()),
+            };
 
         NodeIter {
             node: self,
@@ -927,9 +1091,9 @@ impl<V> Node<V> {
 
 #[derive(Debug, Clone)]
 struct Node1<V> {
+    slot: Node<V>,
     header: Header,
     key: u8,
-    slot: Node<V>,
 }
 
 impl<V> Default for Node1<V> {
@@ -937,7 +1101,7 @@ impl<V> Default for Node1<V> {
         Node1 {
             header: Default::default(),
             key: 0,
-            slot: Node::None,
+            slot: Node::default(),
         }
     }
 }
@@ -961,7 +1125,7 @@ impl<V> Node1<V> {
         (&mut self.header.children, &mut self.slot)
     }
 
-    fn upgrade(mut self) -> Box<Node4<V>> {
+    fn upgrade(&mut self) -> Box<Node4<V>> {
         let mut n4: Box<Node4<V>> = Box::default();
         n4.keys[0] = self.key;
         std::mem::swap(&mut self.slot, &mut n4.slots[0]);
@@ -981,7 +1145,7 @@ impl<V> Default for Node4<V> {
         Node4 {
             header: Default::default(),
             keys: [255; 4],
-            slots: [Node::None, Node::None, Node::None, Node::None],
+            slots: [Node::none(), Node::none(), Node::none(), Node::none()],
         }
     }
 }
@@ -1030,7 +1194,7 @@ impl<V> Node4<V> {
         }
     }
 
-    fn upgrade(mut self) -> Box<Node16<V>> {
+    fn upgrade(&mut self) -> Box<Node16<V>> {
         let mut n16: Box<Node16<V>> = Box::default();
         for (slot, byte) in self.keys.iter().enumerate() {
             std::mem::swap(&mut self.slots[slot], &mut n16.slots[slot]);
@@ -1039,7 +1203,7 @@ impl<V> Node4<V> {
         n16
     }
 
-    fn downgrade(mut self) -> Box<Node1<V>> {
+    fn downgrade(&mut self) -> Box<Node1<V>> {
         let mut n1: Box<Node1<V>> = Box::default();
         let mut dst_idx = 0;
 
@@ -1070,10 +1234,22 @@ impl<V> Default for Node16<V> {
             header: Default::default(),
             keys: [255; 16],
             slots: [
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
             ],
         }
     }
@@ -1135,7 +1311,7 @@ impl<V> Node16<V> {
         }
     }
 
-    fn upgrade(mut self) -> Box<Node48<V>> {
+    fn upgrade(&mut self) -> Box<Node48<V>> {
         let mut n48: Box<Node48<V>> = Box::default();
         for (slot, byte) in self.keys.iter().enumerate() {
             if !self.slots[slot].is_none() {
@@ -1147,7 +1323,7 @@ impl<V> Node16<V> {
         n48
     }
 
-    fn downgrade(mut self) -> Box<Node4<V>> {
+    fn downgrade(&mut self) -> Box<Node4<V>> {
         let mut n4: Box<Node4<V>> = Box::default();
         let mut dst_idx = 0;
 
@@ -1178,18 +1354,54 @@ impl<V> Default for Node48<V> {
             header: Default::default(),
             child_index: [255; 256],
             slots: [
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
             ],
         }
     }
@@ -1234,7 +1446,7 @@ impl<V> Node48<V> {
         }
     }
 
-    fn upgrade(mut self) -> Box<Node256<V>> {
+    fn upgrade(&mut self) -> Box<Node256<V>> {
         let mut n256: Box<Node256<V>> = Box::default();
 
         for (byte, idx) in self.child_index.iter().enumerate() {
@@ -1247,7 +1459,7 @@ impl<V> Node48<V> {
         n256
     }
 
-    fn downgrade(mut self) -> Box<Node16<V>> {
+    fn downgrade(&mut self) -> Box<Node16<V>> {
         let mut n16: Box<Node16<V>> = Box::default();
         let mut dst_idx = 0;
 
@@ -1294,7 +1506,7 @@ impl<V> Node256<V> {
         (&mut self.header.children, slot)
     }
 
-    fn downgrade(mut self) -> Box<Node48<V>> {
+    fn downgrade(&mut self) -> Box<Node48<V>> {
         let mut n48: Box<Node48<V>> = Box::default();
         let mut dst_idx = 0;
 
@@ -1317,70 +1529,262 @@ impl<V> Default for Node256<V> {
         Node256 {
             header: Default::default(),
             slots: [
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
-                Node::None, Node::None, Node::None, Node::None,
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
+                Node::none(),
             ],
         }
     }
@@ -1391,7 +1795,6 @@ fn test_inserts() {
     let mut art = Art::new();
     assert_eq!(art.insert([], "v1"), None);
     assert_eq!(art.insert([], "v2"), Some("v1"));
-
 
     let mut art = Art::new();
     assert_eq!(art.insert([0], "k 0 v 1"), None);
@@ -1564,4 +1967,21 @@ fn regression_06() {
     }
 
     assert!(art.root.is_none());
+}
+
+#[test]
+fn regression_07() {
+    fn run<T: Default>() {
+        let _ = [([], Default::default())]
+            .into_iter()
+            .collect::<Art<(), 0>>();
+    }
+    run::<()>();
+    run::<u8>();
+    run::<u16>();
+    run::<u32>();
+    run::<u64>();
+    run::<usize>();
+    run::<String>();
+    run::<Vec<usize>>();
 }

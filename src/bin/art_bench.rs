@@ -74,13 +74,14 @@ impl std::hash::Hasher for Hasher {
 }
 
 #[allow(unused)]
-type FastMap8<K, V> =
-    std::collections::HashMap<K, V, std::hash::BuildHasherDefault<Hasher>>;
+type FastMap8<K, V> = std::collections::HashMap<K, V, std::hash::BuildHasherDefault<Hasher>>;
 
 fn main() {
     const N: u64 = 10_000_000;
 
-    const VALUE: () = ();
+    const VALUE: u8 = 0;
+
+    let convert = u64::to_be_bytes;
 
     println!();
     println!("Art:");
@@ -89,12 +90,14 @@ fn main() {
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
         //println!("{}", k);
-        assert!(art.insert(k.to_le_bytes(), VALUE).is_none());
+        assert!(art.insert(convert(k), VALUE).is_none());
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million wps {} mb allocated {} mb freed {} mb resident",
                 k as f64 / (before_writes.elapsed().as_micros().max(1)) as f64,
-                allocated(), freed(), resident(),
+                allocated(),
+                freed(),
+                resident(),
             )
         }
     }
@@ -102,12 +105,14 @@ fn main() {
 
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
-        assert_eq!(art.get(&k.to_le_bytes()), Some(&VALUE));
+        assert_eq!(art.get(&convert(k)), Some(&VALUE));
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps {} mb allocated {} mb freed {} mb resident",
                 k as f64 / (before_reads.elapsed().as_micros().max(1)) as f64,
-                allocated(), freed(), resident(),
+                allocated(),
+                freed(),
+                resident(),
             )
         }
     }
@@ -120,7 +125,11 @@ fn main() {
     freed();
     let before_free = std::time::Instant::now();
     drop(art);
-    println!("freeing Art cleared {} mb in {:?}", freed(), before_free.elapsed());
+    println!(
+        "freeing Art cleared {} mb in {:?}",
+        freed(),
+        before_free.elapsed()
+    );
 
     println!();
     println!("BTreeMap:");
@@ -129,12 +138,14 @@ fn main() {
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
         //println!("{}", k);
-        assert!(btree.insert(k.to_le_bytes(), VALUE).is_none());
+        assert!(btree.insert(convert(k), VALUE).is_none());
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million wps {} mb allocated {} mb freed {} mb resident",
                 k as f64 / (before_writes.elapsed().as_micros().max(1)) as f64,
-                allocated(), freed(), resident(),
+                allocated(),
+                freed(),
+                resident(),
             )
         }
     }
@@ -142,12 +153,14 @@ fn main() {
 
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
-        assert_eq!(btree.get(&k.to_le_bytes()), Some(&VALUE));
+        assert_eq!(btree.get(&convert(k)), Some(&VALUE));
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps {} mb allocated {} mb freed {} mb resident",
                 k as f64 / (before_reads.elapsed().as_micros().max(1)) as f64,
-                allocated(), freed(), resident(),
+                allocated(),
+                freed(),
+                resident(),
             )
         }
     }
@@ -160,7 +173,11 @@ fn main() {
     freed();
     let before_free = std::time::Instant::now();
     drop(btree);
-    println!("freeing BTreeMap cleared {} mb in {:?}", freed(), before_free.elapsed());
+    println!(
+        "freeing BTreeMap cleared {} mb in {:?}",
+        freed(),
+        before_free.elapsed()
+    );
 
     println!();
     println!("HashMap:");
@@ -169,12 +186,14 @@ fn main() {
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
         //println!("{}", k);
-        assert!(hash.insert(k.to_le_bytes(), VALUE).is_none());
+        assert!(hash.insert(convert(k), VALUE).is_none());
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million wps {} mb allocated {} mb freed {} mb resident",
                 k as f64 / (before_writes.elapsed().as_micros().max(1)) as f64,
-                allocated(), freed(), resident(),
+                allocated(),
+                freed(),
+                resident(),
             )
         }
     }
@@ -182,12 +201,14 @@ fn main() {
 
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
-        assert_eq!(hash.get(&k.to_le_bytes()), Some(&VALUE));
+        assert_eq!(hash.get(&convert(k)), Some(&VALUE));
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps {} mb allocated {} mb freed {} mb resident",
                 k as f64 / (before_reads.elapsed().as_micros().max(1)) as f64,
-                allocated(), freed(), resident(),
+                allocated(),
+                freed(),
+                resident(),
             )
         }
     }
@@ -200,5 +221,9 @@ fn main() {
     freed();
     let before_free = std::time::Instant::now();
     drop(hash);
-    println!("freeing HashMap cleared {} mb in {:?}", freed(), before_free.elapsed());
+    println!(
+        "freeing HashMap cleared {} mb in {:?}",
+        freed(),
+        before_free.elapsed()
+    );
 }
