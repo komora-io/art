@@ -3,6 +3,9 @@ use std::mem::size_of;
 use std::ops::{Bound, RangeBounds};
 use std::fmt;
 
+#[repr(align(8))]
+struct MinAlign<T>(T);
+
 /// An Adaptive Radix Trie (ART) for fixed-length
 /// keys.
 #[derive(Clone)]
@@ -81,7 +84,7 @@ impl<V, const K: usize> Art<V, K> {
                 Some(value)
             }
             NodeMut::None => {
-                *cursor = Node::value(Box::new(value));
+                *cursor = Node::value(Box::new(MinAlign(value)));
                 if let Some(children) = parent_opt {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -246,13 +249,11 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
 }
 
 #[cfg(target_pointer_width = "64")]
-const fn _size_tests() {
+const fn _size_and_alignment_tests() {
+    let _: [u8; 2_u32.pow(PTR_MASK.trailing_zeros()) as usize] = [0; std::mem::align_of::<MinAlign<()>>()];
     let _: [u8; 8] = [0; size_of::<Node<()>>()];
     let _: [u8; 12] = [0; size_of::<Header>()];
     let _: [u8; 24] = [0; size_of::<Node1<()>>()];
-    // TODO see if we can get this to work, as
-    // specified in the paper
-    // let _: [u8; 52] = [0; size_of::<Node4<()>>()];
     let _: [u8; 48] = [0; size_of::<Node4<()>>()];
     let _: [u8; 160] = [0; size_of::<Node16<()>>()];
     let _: [u8; 656] = [0; size_of::<Node48<()>>()];
@@ -569,7 +570,7 @@ impl <V: Clone> Clone for Node<V> {
             NodeRef::Node48(n48) => Node::node48(Box::new(n48.clone())),
             NodeRef::Node256(n256) => Node::node256(Box::new(n256.clone())),
             NodeRef::None => Node::default(),
-            NodeRef::Value(v) => Node::value(Box::new(v.clone())),
+            NodeRef::Value(v) => Node::value(Box::new(MinAlign(v.clone()))),
         }
     }
 }
@@ -589,10 +590,16 @@ impl<V> Drop for Node<V> {
         match self.0 & TAG_MASK {
             TAG_NONE => {},
             TAG_VALUE => {
-                let ptr: *mut V = (self.0 & PTR_MASK) as *mut V;
-                drop(unsafe {
-                    Box::from_raw(ptr)
-                });
+                if size_of::<V>() > 0 {
+                    let ptr: *mut MinAlign<V> = if size_of::<V>() > 0 {
+                        (self.0 & PTR_MASK) as *mut MinAlign<V>
+                    } else {
+                        std::ptr::NonNull::dangling().as_ptr()
+                    };
+                    drop(unsafe {
+                        Box::from_raw(ptr)
+                    });
+                }
             }
             TAG_1 => {
                 let ptr: *mut Node1<V> = (self.0 & PTR_MASK) as *mut Node1<V>;
@@ -706,8 +713,8 @@ impl<V> Node<V> {
         Node(us | TAG_256, PhantomData)
     }
 
-    fn value(value: Box<V>) -> Node<V> {
-        let ptr: *mut V = Box::into_raw(value);
+    fn value(value: Box<MinAlign<V>>) -> Node<V> {
+        let ptr: *mut MinAlign<V> = Box::into_raw(value);
         let us = ptr as usize;
         if size_of::<V>() > 0 {
             assert_eq!(us & TAG_VALUE, 0);
@@ -724,15 +731,15 @@ impl<V> Node<V> {
         match us & TAG_MASK {
             TAG_NONE => None,
             TAG_VALUE => {
-                let ptr: *mut V = if size_of::<V>() > 0 {
-                    (us & PTR_MASK) as *mut V
+                let ptr: *mut MinAlign<V> = if size_of::<V>() > 0 {
+                    (us & PTR_MASK) as *mut MinAlign<V>
                 } else {
                     std::ptr::NonNull::dangling().as_ptr()
                 };
-                let boxed: Box<V> = unsafe {
+                let boxed: Box<MinAlign<V>> = unsafe {
                     Box::from_raw(ptr)
                 };
-                Some(*boxed)
+                Some(boxed.0)
             }
             _ => unreachable!(),
         }
@@ -742,13 +749,13 @@ impl<V> Node<V> {
         match self.0 & TAG_MASK {
             TAG_NONE => NodeRef::None,
             TAG_VALUE => {
-                let ptr: *const V = if size_of::<V>() > 0 {
-                    (self.0 & PTR_MASK) as *const V
+                let ptr: *const MinAlign<V> = if size_of::<V>() > 0 {
+                    (self.0 & PTR_MASK) as *const MinAlign<V>
                 } else {
                     std::ptr::NonNull::dangling().as_ptr()
                 };
                 let reference: &V = unsafe {
-                    &*ptr
+                    &(*ptr).0
                 };
                 NodeRef::Value(reference)
             }
@@ -795,13 +802,13 @@ impl<V> Node<V> {
         match self.0 & TAG_MASK {
             TAG_NONE => NodeMut::None,
             TAG_VALUE => {
-                let ptr: *mut V = if size_of::<V>() > 0 {
-                    (self.0 & PTR_MASK) as *mut V
+                let ptr: *mut MinAlign<V> = if size_of::<V>() > 0 {
+                    (self.0 & PTR_MASK) as *mut MinAlign<V>
                 } else {
                     std::ptr::NonNull::dangling().as_ptr()
                 };
                 let reference: &mut V = unsafe {
-                    &mut *ptr
+                    &mut (*ptr).0
                 };
                 NodeMut::Value(reference)
             }
