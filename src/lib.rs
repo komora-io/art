@@ -146,7 +146,7 @@ impl<V, const K: usize> Art<V, K> {
                 }
                 // we need to create intermediate nodes before
                 // populating the value for this insert
-                *cursor = Node::Node4(Box::default());
+                *cursor = Node::Node1(Box::default());
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -654,6 +654,7 @@ struct Header {
 #[derive(Debug, Clone)]
 enum Node<V> {
     None,
+    Node1(Box<Node1<V>>),
     Node4(Box<Node4<V>>),
     Node16(Box<Node16<V>>),
     Node48(Box<Node48<V>>),
@@ -749,6 +750,10 @@ impl<V> Node<V> {
     fn assert_size(&self) {
         debug_assert_eq!(
             {
+                if let Node::Node1(_) = self {
+                    debug_assert_eq!(self.len(), 1);
+                    return;
+                }
                 let slots: &[Node<V>] = match self {
                     Node::Node4(n4) => &n4.slots,
                     Node::Node16(n16) => &n16.slots,
@@ -764,6 +769,7 @@ impl<V> Node<V> {
 
     fn is_full(&self) -> bool {
         match self {
+            Node::Node1(_) => 1 == self.len(),
             Node::Node4(_) => 4 == self.len(),
             Node::Node16(_) => 16 == self.len(),
             Node::Node48(_) => 48 == self.len(),
@@ -778,6 +784,7 @@ impl<V> Node<V> {
 
     fn header(&self) -> &Header {
         match self {
+            Node::Node1(n1) => &n1.header,
             Node::Node4(n4) => &n4.header,
             Node::Node16(n16) => &n16.header,
             Node::Node48(n48) => &n48.header,
@@ -789,6 +796,7 @@ impl<V> Node<V> {
 
     fn header_mut(&mut self) -> &mut Header {
         match self {
+            Node::Node1(n1) => &mut n1.header,
             Node::Node4(n4) => &mut n4.header,
             Node::Node16(n16) => &mut n16.header,
             Node::Node48(n48) => &mut n48.header,
@@ -804,6 +812,7 @@ impl<V> Node<V> {
 
     fn child(&self, byte: u8) -> Option<&Node<V>> {
         match self {
+            Node::Node1(n1) => n1.child(byte),
             Node::Node4(n4) => n4.child(byte),
             Node::Node16(n16) => n16.child(byte),
             Node::Node48(n48) => n48.child(byte),
@@ -830,6 +839,7 @@ impl<V> Node<V> {
         }
 
         Some(match self {
+            Node::Node1(n1) => n1.child_mut(byte),
             Node::Node4(n4) => n4.child_mut(byte),
             Node::Node16(n16) => n16.child_mut(byte),
             Node::Node48(n48) => n48.child_mut(byte, clear_child_index),
@@ -841,7 +851,8 @@ impl<V> Node<V> {
 
     fn should_shrink(&self) -> bool {
         match (self, self.len()) {
-            (Node::Node4(_), 0) |
+            (Node::Node1(_), 0) |
+            (Node::Node4(_), 1) |
             (Node::Node16(_), 4) |
             (Node::Node48(_), 16) |
             (Node::Node256(_), 48) => true,
@@ -861,10 +872,11 @@ impl<V> Node<V> {
         let swapped = std::mem::take(self);
 
         *self = match (swapped, children) {
-            (Node::Node4(_), 0) => {
+            (Node::Node1(_), 0) => {
                 dropped = true;
                 Node::None
             },
+            (Node::Node4(n4), 1) => Node::Node1(n4.downgrade()),
             (Node::Node16(n16), 4) => Node::Node4(n16.downgrade()),
             (Node::Node48(n48), 16) => Node::Node16(n48.downgrade()),
             (Node::Node256(n256), 48) => Node::Node48(n256.downgrade()),
@@ -882,6 +894,7 @@ impl<V> Node<V> {
         let old_header = *self.header();
         let swapped = std::mem::take(self);
         *self = match swapped {
+            Node::Node1(n1) => Node::Node4(n1.upgrade()),
             Node::Node4(n4) => Node::Node16(n4.upgrade()),
             Node::Node16(n16) => Node::Node48(n16.upgrade()),
             Node::Node48(n48) => Node::Node256(n48.upgrade()),
@@ -894,6 +907,7 @@ impl<V> Node<V> {
 
     fn node_iter<'a>(&'a self) -> NodeIter<'a, V> {
         let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> = match self {
+            Node::Node1(n1) => Box::new(n1.iter()),
             Node::Node4(n4) => Box::new(n4.iter()),
             Node::Node16(n16) => Box::new(n16.iter()),
             Node::Node48(n48) => Box::new(n48.iter()),
@@ -911,6 +925,49 @@ impl<V> Node<V> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct Node1<V> {
+    header: Header,
+    key: u8,
+    slot: Node<V>,
+}
+
+impl<V> Default for Node1<V> {
+    fn default() -> Node1<V> {
+        Node1 {
+            header: Default::default(),
+            key: 0,
+            slot: Node::None,
+        }
+    }
+}
+
+impl<V> Node1<V> {
+    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
+        std::iter::once((self.key, &self.slot))
+    }
+
+    fn child(&self, byte: u8) -> Option<&Node<V>> {
+        if self.key == byte && !self.slot.is_none() {
+            Some(&self.slot)
+        } else {
+            None
+        }
+    }
+
+    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
+        assert!(byte == self.key || self.slot.is_none());
+        self.key = byte;
+        (&mut self.header.children, &mut self.slot)
+    }
+
+    fn upgrade(mut self) -> Box<Node4<V>> {
+        let mut n4: Box<Node4<V>> = Box::default();
+        n4.keys[0] = self.key;
+        std::mem::swap(&mut self.slot, &mut n4.slots[0]);
+        n4
+    }
+}
 
 #[derive(Debug, Clone)]
 struct Node4<V> {
@@ -980,6 +1037,23 @@ impl<V> Node4<V> {
             n16.keys[slot] = *byte;
         }
         n16
+    }
+
+    fn downgrade(mut self) -> Box<Node1<V>> {
+        let mut n1: Box<Node1<V>> = Box::default();
+        let mut dst_idx = 0;
+
+        for (slot, byte) in self.keys.iter().enumerate() {
+            if !self.slots[slot].is_none() {
+                std::mem::swap(&mut self.slots[slot], &mut n1.slot);
+                n1.key = *byte;
+                dst_idx += 1;
+            }
+        }
+
+        assert_eq!(dst_idx, 1);
+
+        n1
     }
 }
 
