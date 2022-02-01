@@ -16,7 +16,20 @@ pub struct Art<ValueType, const KEY_LENGTH: usize> {
     root: Node<ValueType>,
 }
 
-impl <V: fmt::Debug, const K: usize> fmt::Debug for Art<V, K> {
+impl<V, const K: usize> FromIterator<([u8; K], V)> for Art<V, K> {
+    fn from_iter<T>(iter: T) -> Self
+    where
+        T: IntoIterator<Item = ([u8; K], V)>
+    {
+        let mut art = Art::new();
+        for (k, v) in iter {
+            art.insert(k, v);
+        }
+        art
+    }
+}
+
+impl<V: fmt::Debug, const K: usize> fmt::Debug for Art<V, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Art ")?;
         f.debug_map()
@@ -106,7 +119,8 @@ impl<V, const K: usize> Art<V, K> {
                     *children = children.checked_sub(1).unwrap();
 
                     if *children == 48 || *children == 16
-                        || *children == 4 || *children == 0 {
+                        || *children == 4 || *children == 1
+                        || *children == 0 {
                         self.prune(key);
                     }
                 }
@@ -1749,4 +1763,19 @@ fn regression_06() {
     }
 
     assert!(art.root.is_none());
+}
+
+#[test]
+fn regression_07() {
+    fn run<T: Default>() {
+        let _ = [([], Default::default())].into_iter().collect::<Art<(), 0>>();
+    }
+    run::<()>();
+    run::<u8>();
+    run::<u16>();
+    run::<u32>();
+    run::<u64>();
+    run::<usize>();
+    run::<String>();
+    run::<Vec<usize>>();
 }
