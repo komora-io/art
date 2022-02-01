@@ -248,17 +248,18 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
 #[cfg(target_pointer_width = "64")]
 const fn _size_tests() {
     let _: [u8; 8] = [0; size_of::<Node<()>>()];
-    let _: [u8; 16] = [0; size_of::<Header>()];
+    let _: [u8; 12] = [0; size_of::<Header>()];
+    let _: [u8; 24] = [0; size_of::<Node1<()>>()];
     // TODO see if we can get this to work, as
     // specified in the paper
     // let _: [u8; 52] = [0; size_of::<Node4<()>>()];
-    let _: [u8; 56] = [0; size_of::<Node4<()>>()];
+    let _: [u8; 48] = [0; size_of::<Node4<()>>()];
     let _: [u8; 160] = [0; size_of::<Node16<()>>()];
     let _: [u8; 656] = [0; size_of::<Node48<()>>()];
     let _: [u8; 2064] = [0; size_of::<Node256<()>>()];
 }
 
-const MAX_PATH_COMPRESSION_BYTES: usize = 13;
+const MAX_PATH_COMPRESSION_BYTES: usize = 9;
 
 const NONE_HEADER: Header = Header {
     children: 0,
@@ -557,9 +558,31 @@ struct Header {
     path_len: u8,
 }
 
-// TODO correctly implement Debug and Clone
-#[derive(Debug, Clone)]
 struct Node<V>(usize, PhantomData<V>);
+
+impl <V: Clone> Clone for Node<V> {
+    fn clone(&self) -> Node<V> {
+        match self.deref() {
+            NodeRef::Node1(n1) => Node::node1(Box::new(n1.clone())),
+            NodeRef::Node4(n4) => Node::node4(Box::new(n4.clone())),
+            NodeRef::Node16(n16) => Node::node16(Box::new(n16.clone())),
+            NodeRef::Node48(n48) => Node::node48(Box::new(n48.clone())),
+            NodeRef::Node256(n256) => Node::node256(Box::new(n256.clone())),
+            NodeRef::None => Node::default(),
+            NodeRef::Value(v) => Node::value(Box::new(v.clone())),
+        }
+    }
+}
+
+impl <V: fmt::Debug> fmt::Debug for Node<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Node")
+            .field("header", self.header())
+            .field("inner", &self.deref())
+            .finish()?;
+        Ok(())
+    }
+}
 
 impl<V> Drop for Node<V> {
     fn drop(&mut self) {
@@ -616,6 +639,7 @@ const TAG_256: usize = 0b110;
 const TAG_MASK: usize = 0b111;
 const PTR_MASK: usize = usize::MAX - TAG_MASK;
 
+#[derive(Debug)]
 enum NodeRef<'a, V> {
     None,
     Value(&'a V),
@@ -1078,9 +1102,9 @@ impl<V> Node<V> {
 
 #[derive(Debug, Clone)]
 struct Node1<V> {
+    slot: Node<V>,
     header: Header,
     key: u8,
-    slot: Node<V>,
 }
 
 impl<V> Default for Node1<V> {
