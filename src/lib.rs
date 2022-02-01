@@ -1,11 +1,24 @@
-use std::ops::{Bound, RangeBounds};
 use std::marker::PhantomData;
 use std::mem::size_of;
+use std::ops::{Bound, RangeBounds};
+use std::fmt;
 
-#[derive(Debug, Clone)]
-pub struct Art<V, const K: usize> {
+/// An Adaptive Radix Trie (ART) for fixed-length
+/// keys.
+#[derive(Clone)]
+pub struct Art<ValueType, const KEY_LENGTH: usize> {
     len: usize,
-    root: Node<V>,
+    root: Node<ValueType>,
+}
+
+impl <V: fmt::Debug, const K: usize> fmt::Debug for Art<V, K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Art ")?;
+        f.debug_map()
+            .entries(self.iter())
+            .finish()?;
+        Ok(())
+    }
 }
 
 impl<V, const K: usize> Default for Art<V, K> {
@@ -134,7 +147,7 @@ impl<V, const K: usize> Art<V, K> {
                 }
                 // we need to create intermediate nodes before
                 // populating the value for this insert
-                *cursor = Node::node4(Box::default());
+                *cursor = Node::node1(Box::default());
                 if let Some(children) = parent {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -558,6 +571,12 @@ impl<V> Drop for Node<V> {
                     Box::from_raw(ptr)
                 });
             }
+            TAG_1 => {
+                let ptr: *mut Node1<V> = (self.0 & PTR_MASK) as *mut Node1<V>;
+                drop(unsafe {
+                    Box::from_raw(ptr)
+                });
+            }
             TAG_4 => {
                 let ptr: *mut Node4<V> = (self.0 & PTR_MASK) as *mut Node4<V>;
                 drop(unsafe {
@@ -589,16 +608,18 @@ impl<V> Drop for Node<V> {
 
 const TAG_NONE: usize = 0b000;
 const TAG_VALUE: usize = 0b001;
-const TAG_4: usize = 0b010;
-const TAG_16: usize = 0b011;
-const TAG_48: usize = 0b100;
-const TAG_256: usize = 0b101;
+const TAG_1: usize = 0b010;
+const TAG_4: usize = 0b011;
+const TAG_16: usize = 0b100;
+const TAG_48: usize = 0b101;
+const TAG_256: usize = 0b110;
 const TAG_MASK: usize = 0b111;
 const PTR_MASK: usize = usize::MAX - TAG_MASK;
 
 enum NodeRef<'a, V> {
     None,
     Value(&'a V),
+    Node1(&'a Node1<V>),
     Node4(&'a Node4<V>),
     Node16(&'a Node16<V>),
     Node48(&'a Node48<V>),
@@ -608,6 +629,7 @@ enum NodeRef<'a, V> {
 enum NodeMut<'a, V> {
     None,
     Value(&'a mut V),
+    Node1(&'a mut Node1<V>),
     Node4(&'a mut Node4<V>),
     Node16(&'a mut Node16<V>),
     Node48(&'a mut Node48<V>),
@@ -623,6 +645,13 @@ impl<V> Default for Node<V> {
 impl<V> Node<V> {
     const fn none() -> Node<V> {
         Node(TAG_NONE, PhantomData)
+    }
+
+    fn node1(n1: Box<Node1<V>>) -> Node<V> {
+        let ptr: *mut Node1<V> = Box::into_raw(n1);
+        let us = ptr as usize;
+        assert_eq!(us & TAG_1, 0);
+        Node(us | TAG_1, PhantomData)
     }
 
     fn node4(n4: Box<Node4<V>>) -> Node<V> {
@@ -699,6 +728,13 @@ impl<V> Node<V> {
                 };
                 NodeRef::Value(reference)
             }
+            TAG_1 => {
+                let ptr: *const Node1<V> = (self.0 & PTR_MASK) as *const Node1<V>;
+                let reference: &Node1<V> = unsafe {
+                    &*ptr
+                };
+                NodeRef::Node1(reference)
+            }
             TAG_4 => {
                 let ptr: *const Node4<V> = (self.0 & PTR_MASK) as *const Node4<V>;
                 let reference: &Node4<V> = unsafe {
@@ -744,6 +780,13 @@ impl<V> Node<V> {
                     &mut *ptr
                 };
                 NodeMut::Value(reference)
+            }
+            TAG_1 => {
+                let ptr: *mut Node1<V> = (self.0 & PTR_MASK) as *mut Node1<V>;
+                let reference: &mut Node1<V> = unsafe {
+                    &mut *ptr
+                };
+                NodeMut::Node1(reference)
             }
             TAG_4 => {
                 let ptr: *mut Node4<V> = (self.0 & PTR_MASK) as *mut Node4<V>;
@@ -859,6 +902,10 @@ impl<V> Node<V> {
         debug_assert_eq!(
             {
                 let slots: &[Node<V>] = match self.deref() {
+                    NodeRef::Node1(_) => {
+                        debug_assert_eq!(self.len(), 1);
+                        return;
+                    },
                     NodeRef::Node4(n4) => &n4.slots,
                     NodeRef::Node16(n16) => &n16.slots,
                     NodeRef::Node48(n48) => &n48.slots,
@@ -873,6 +920,7 @@ impl<V> Node<V> {
 
     fn is_full(&self) -> bool {
         match self.deref() {
+            NodeRef::Node1(_) => 1 == self.len(),
             NodeRef::Node4(_) => 4 == self.len(),
             NodeRef::Node16(_) => 16 == self.len(),
             NodeRef::Node48(_) => 48 == self.len(),
@@ -887,6 +935,7 @@ impl<V> Node<V> {
 
     fn header(&self) -> &Header {
         match self.deref() {
+            NodeRef::Node1(n1) => &n1.header,
             NodeRef::Node4(n4) => &n4.header,
             NodeRef::Node16(n16) => &n16.header,
             NodeRef::Node48(n48) => &n48.header,
@@ -898,6 +947,7 @@ impl<V> Node<V> {
 
     fn header_mut(&mut self) -> &mut Header {
         match self.deref_mut() {
+            NodeMut::Node1(n1) => &mut n1.header,
             NodeMut::Node4(n4) => &mut n4.header,
             NodeMut::Node16(n16) => &mut n16.header,
             NodeMut::Node48(n48) => &mut n48.header,
@@ -913,6 +963,7 @@ impl<V> Node<V> {
 
     fn child(&self, byte: u8) -> Option<&Node<V>> {
         match self.deref() {
+            NodeRef::Node1(n1) => n1.child(byte),
             NodeRef::Node4(n4) => n4.child(byte),
             NodeRef::Node16(n16) => n16.child(byte),
             NodeRef::Node48(n48) => n48.child(byte),
@@ -939,6 +990,7 @@ impl<V> Node<V> {
         }
 
         Some(match self.deref_mut() {
+            NodeMut::Node1(n1) => n1.child_mut(byte),
             NodeMut::Node4(n4) => n4.child_mut(byte),
             NodeMut::Node16(n16) => n16.child_mut(byte),
             NodeMut::Node48(n48) => n48.child_mut(byte, clear_child_index),
@@ -950,7 +1002,8 @@ impl<V> Node<V> {
 
     fn should_shrink(&self) -> bool {
         match (self.deref(), self.len()) {
-            (NodeRef::Node4(_), 0) |
+            (NodeRef::Node1(_), 0) |
+            (NodeRef::Node4(_), 1) |
             (NodeRef::Node16(_), 4) |
             (NodeRef::Node48(_), 16) |
             (NodeRef::Node256(_), 48) => true,
@@ -970,10 +1023,11 @@ impl<V> Node<V> {
         let mut swapped = std::mem::take(self);
 
         *self = match (swapped.deref_mut(), children) {
-            (NodeMut::Node4(_), 0) => {
+            (NodeMut::Node1(_), 0) => {
                 dropped = true;
                 Node::none()
             },
+            (NodeMut::Node4(n4), 1) => Node::node1(n4.downgrade()),
             (NodeMut::Node16(n16), 4) => Node::node4(n16.downgrade()),
             (NodeMut::Node48(n48), 16) => Node::node16(n48.downgrade()),
             (NodeMut::Node256(n256), 48) => Node::node48(n256.downgrade()),
@@ -991,6 +1045,7 @@ impl<V> Node<V> {
         let old_header = *self.header();
         let mut swapped = std::mem::take(self);
         *self = match swapped.deref_mut() {
+            NodeMut::Node1(n1) => Node::node4(n1.upgrade()),
             NodeMut::Node4(n4) => Node::node16(n4.upgrade()),
             NodeMut::Node16(n16) => Node::node48(n16.upgrade()),
             NodeMut::Node48(n48) => Node::node256(n48.upgrade()),
@@ -1003,6 +1058,7 @@ impl<V> Node<V> {
 
     fn node_iter<'a>(&'a self) -> NodeIter<'a, V> {
         let children: Box<dyn 'a + DoubleEndedIterator<Item = (u8, &'a Node<V>)>> = match self.deref() {
+            NodeRef::Node1(n1) => Box::new(n1.iter()),
             NodeRef::Node4(n4) => Box::new(n4.iter()),
             NodeRef::Node16(n16) => Box::new(n16.iter()),
             NodeRef::Node48(n48) => Box::new(n48.iter()),
@@ -1017,6 +1073,50 @@ impl<V> Node<V> {
             node: self,
             children,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Node1<V> {
+    header: Header,
+    key: u8,
+    slot: Node<V>,
+}
+
+impl<V> Default for Node1<V> {
+    fn default() -> Node1<V> {
+        Node1 {
+            header: Default::default(),
+            key: 0,
+            slot: Node::default(),
+        }
+    }
+}
+
+impl<V> Node1<V> {
+    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
+        std::iter::once((self.key, &self.slot))
+    }
+
+    fn child(&self, byte: u8) -> Option<&Node<V>> {
+        if self.key == byte && !self.slot.is_none() {
+            Some(&self.slot)
+        } else {
+            None
+        }
+    }
+
+    fn child_mut(&mut self, byte: u8) -> (&mut u16, &mut Node<V>) {
+        assert!(byte == self.key || self.slot.is_none());
+        self.key = byte;
+        (&mut self.header.children, &mut self.slot)
+    }
+
+    fn upgrade(&mut self) -> Box<Node4<V>> {
+        let mut n4: Box<Node4<V>> = Box::default();
+        n4.keys[0] = self.key;
+        std::mem::swap(&mut self.slot, &mut n4.slots[0]);
+        n4
     }
 }
 
@@ -1088,6 +1188,23 @@ impl<V> Node4<V> {
             n16.keys[slot] = *byte;
         }
         n16
+    }
+
+    fn downgrade(&mut self) -> Box<Node1<V>> {
+        let mut n1: Box<Node1<V>> = Box::default();
+        let mut dst_idx = 0;
+
+        for (slot, byte) in self.keys.iter().enumerate() {
+            if !self.slots[slot].is_none() {
+                std::mem::swap(&mut self.slots[slot], &mut n1.slot);
+                n1.key = *byte;
+                dst_idx += 1;
+            }
+        }
+
+        assert_eq!(dst_idx, 1);
+
+        n1
     }
 }
 
