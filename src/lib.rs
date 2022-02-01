@@ -3,6 +3,8 @@ use std::mem::size_of;
 use std::ops::{Bound, RangeBounds};
 use std::fmt;
 
+// This is important due to the use of tagged pointers
+// in the low 3 bits of the node addresses.
 #[repr(align(8))]
 struct MinAlign<T>(T);
 
@@ -84,7 +86,7 @@ impl<V, const K: usize> Art<V, K> {
                 Some(value)
             }
             NodeMut::None => {
-                *cursor = Node::value(Box::new(MinAlign(value)));
+                *cursor = Node::value(value);
                 if let Some(children) = parent_opt {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -570,7 +572,7 @@ impl <V: Clone> Clone for Node<V> {
             NodeRef::Node48(n48) => Node::node48(Box::new(n48.clone())),
             NodeRef::Node256(n256) => Node::node256(Box::new(n256.clone())),
             NodeRef::None => Node::default(),
-            NodeRef::Value(v) => Node::value(Box::new(MinAlign(v.clone()))),
+            NodeRef::Value(v) => Node::value(v.clone()),
         }
     }
 }
@@ -713,8 +715,9 @@ impl<V> Node<V> {
         Node(us | TAG_256, PhantomData)
     }
 
-    fn value(value: Box<MinAlign<V>>) -> Node<V> {
-        let ptr: *mut MinAlign<V> = Box::into_raw(value);
+    fn value(value: V) -> Node<V> {
+        let bx = Box::new(MinAlign(value));
+        let ptr: *mut MinAlign<V> = Box::into_raw(bx);
         let us = ptr as usize;
         if size_of::<V>() > 0 {
             assert_eq!(us & TAG_VALUE, 0);
