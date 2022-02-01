@@ -79,7 +79,7 @@ impl<V, const K: usize> Art<V, K> {
                 Some(value)
             }
             Node::None => {
-                *cursor = Node::Value(MaybeInline::new(value));
+                *cursor = Node::Value(InlinableBox::new(value));
                 if let Some(children) = parent_opt {
                     *children = children.checked_add(1).unwrap();
                 }
@@ -249,7 +249,7 @@ fn map_bound<T, U, F: FnOnce(T) -> U>(bound: Bound<T>, f: F) -> Bound<U> {
 /// a type's size and alignment are less than or equal
 /// to that of `usize`.
 #[derive(Debug)]
-struct MaybeInline<T>(usize, std::marker::PhantomData<T>);
+struct InlinableBox<T>(usize, std::marker::PhantomData<T>);
 
 const fn can_inline<T>() -> bool {
     std::mem::size_of::<T>() <= std::mem::size_of::<usize>()
@@ -257,7 +257,18 @@ const fn can_inline<T>() -> bool {
     std::mem::align_of::<T>() <= std::mem::align_of::<usize>()
 }
 
-impl<T> Drop for MaybeInline<T> {
+const fn _size_test() {
+    #[repr(align(1024))]
+    struct Big([u8; 4096]);
+
+    let _: [u8; std::mem::size_of::<usize>()] = [0; std::mem::size_of::<InlinableBox<()>>()];
+    let _: [u8; std::mem::align_of::<usize>()] = [0; std::mem::align_of::<InlinableBox<()>>()];
+
+    let _: [u8; std::mem::size_of::<usize>()] = [0; std::mem::size_of::<InlinableBox<Big>>()];
+    let _: [u8; std::mem::align_of::<usize>()] = [0; std::mem::align_of::<InlinableBox<Big>>()];
+}
+
+impl<T> Drop for InlinableBox<T> {
     fn drop(&mut self) {
         if can_inline::<T>() {
             unsafe {
@@ -271,13 +282,13 @@ impl<T> Drop for MaybeInline<T> {
     }
 }
 
-impl<T:Clone > Clone for MaybeInline<T> {
+impl<T:Clone > Clone for InlinableBox<T> {
     fn clone(&self) -> Self {
-        MaybeInline::new(self.deref().clone())
+        InlinableBox::new(self.deref().clone())
     }
 }
 
-impl<T> Deref for MaybeInline<T> {
+impl<T> Deref for InlinableBox<T> {
     type Target = T;
 
     fn deref(&self) -> &T {
@@ -293,7 +304,7 @@ impl<T> Deref for MaybeInline<T> {
     }
 }
 
-impl<T> DerefMut for MaybeInline<T> {
+impl<T> DerefMut for InlinableBox<T> {
     fn deref_mut(&mut self) -> &mut T {
         let ptr = if can_inline::<T>() {
             (&mut self.0) as *mut usize as *mut T
@@ -307,8 +318,8 @@ impl<T> DerefMut for MaybeInline<T> {
     }
 }
 
-impl<T> MaybeInline<T> {
-    fn new(item: T) -> MaybeInline<T> {
+impl<T> InlinableBox<T> {
+    fn new(item: T) -> InlinableBox<T> {
         let integer = if can_inline::<T>() {
             let mut integer = 0_usize;
             unsafe {
@@ -319,7 +330,7 @@ impl<T> MaybeInline<T> {
             let ptr: *mut T = Box::into_raw(Box::new(item));
             ptr as usize
         };
-        MaybeInline(integer, std::marker::PhantomData)
+        InlinableBox(integer, std::marker::PhantomData)
     }
 
     fn take(self) -> T {
@@ -647,7 +658,7 @@ enum Node<V> {
     Node16(Box<Node16<V>>),
     Node48(Box<Node48<V>>),
     Node256(Box<Node256<V>>),
-    Value(MaybeInline<V>),
+    Value(InlinableBox<V>),
 }
 
 impl<V> Default for Node<V> {
