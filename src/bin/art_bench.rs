@@ -89,7 +89,7 @@ fn main() {
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
         //println!("{}", k);
-        assert!(art.insert(k.to_le_bytes(), VALUE).is_none());
+        assert!(art.insert(k.to_be_bytes(), VALUE).is_none());
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million wps {} mb allocated {} mb freed {} mb resident",
@@ -102,7 +102,7 @@ fn main() {
 
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
-        assert_eq!(art.get(&k.to_le_bytes()), Some(&VALUE));
+        assert_eq!(art.get(&k.to_be_bytes()), Some(&VALUE));
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps {} mb allocated {} mb freed {} mb resident",
@@ -129,7 +129,7 @@ fn main() {
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
         //println!("{}", k);
-        assert!(btree.insert(k.to_le_bytes(), VALUE).is_none());
+        assert!(btree.insert(k.to_be_bytes(), VALUE).is_none());
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million wps {} mb allocated {} mb freed {} mb resident",
@@ -142,7 +142,7 @@ fn main() {
 
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
-        assert_eq!(btree.get(&k.to_le_bytes()), Some(&VALUE));
+        assert_eq!(btree.get(&k.to_be_bytes()), Some(&VALUE));
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps {} mb allocated {} mb freed {} mb resident",
@@ -169,7 +169,7 @@ fn main() {
     let before_writes = std::time::Instant::now();
     for k in 0_u64..N {
         //println!("{}", k);
-        assert!(hash.insert(k.to_le_bytes(), VALUE).is_none());
+        assert!(hash.insert(k.to_be_bytes(), VALUE).is_none());
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million wps {} mb allocated {} mb freed {} mb resident",
@@ -182,7 +182,7 @@ fn main() {
 
     let before_reads = std::time::Instant::now();
     for k in 0_u64..N {
-        assert_eq!(hash.get(&k.to_le_bytes()), Some(&VALUE));
+        assert_eq!(hash.get(&k.to_be_bytes()), Some(&VALUE));
         if (k + 1) % (N / 10) == 0 {
             println!(
                 "{:.2} million rps {} mb allocated {} mb freed {} mb resident",
