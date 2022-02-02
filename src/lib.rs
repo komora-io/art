@@ -85,8 +85,12 @@ impl<V, const K: usize> Art<V, K> {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.len
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn insert(&mut self, key: [u8; K], mut value: V) -> Option<V> {
@@ -750,7 +754,7 @@ impl<V> Node<V> {
         }
     }
 
-    fn deref(&self) -> NodeRef<'_, V> {
+    const fn deref(&self) -> NodeRef<'_, V> {
         match self.0 & TAG_MASK {
             TAG_NONE => NodeRef::None,
             TAG_VALUE => {
@@ -905,8 +909,7 @@ impl<V> Node<V> {
         self.header_mut().children = 1;
     }
 
-    #[inline]
-    fn is_none(&self) -> bool {
+    const fn is_none(&self) -> bool {
         self.0 == TAG_NONE
     }
 
@@ -930,7 +933,7 @@ impl<V> Node<V> {
         )
     }
 
-    fn is_full(&self) -> bool {
+    const fn is_full(&self) -> bool {
         match self.deref() {
             NodeRef::Node1(_) => 1 == self.len(),
             NodeRef::Node4(_) => 4 == self.len(),
@@ -941,11 +944,11 @@ impl<V> Node<V> {
         }
     }
 
-    fn len(&self) -> usize {
+    const fn len(&self) -> usize {
         self.header().children as usize
     }
 
-    fn header(&self) -> &Header {
+    const fn header(&self) -> &Header {
         match self.deref() {
             NodeRef::Node1(n1) => &n1.header,
             NodeRef::Node4(n4) => &n4.header,
@@ -1111,7 +1114,7 @@ impl<V> Node1<V> {
         std::iter::once((self.key, &self.slot))
     }
 
-    fn child(&self, byte: u8) -> Option<&Node<V>> {
+    const fn child(&self, byte: u8) -> Option<&Node<V>> {
         if self.key == byte && !self.slot.is_none() {
             Some(&self.slot)
         } else {
@@ -1420,7 +1423,7 @@ impl<V> Node48<V> {
         self.slots.iter().position(Node::is_none)
     }
 
-    fn child(&self, byte: u8) -> Option<&Node<V>> {
+    const fn child(&self, byte: u8) -> Option<&Node<V>> {
         let idx = self.child_index[byte as usize];
         if idx == 255 || self.slots[idx as usize].is_none() {
             None
@@ -1493,7 +1496,7 @@ impl<V> Node256<V> {
             .map(|(c, slot)| (u8::try_from(c).unwrap(), slot))
     }
 
-    fn child(&self, byte: u8) -> Option<&Node<V>> {
+    const fn child(&self, byte: u8) -> Option<&Node<V>> {
         if self.slots[byte as usize].is_none() {
             None
         } else {
