@@ -1945,7 +1945,7 @@ fn regression_05() {
 
     let k = [0; 2];
     art.insert(k, 0);
-    art.remove(&k);
+    assert_eq!(art.remove(&k), Some(0));
 
     assert!(art.root.is_none());
 }
