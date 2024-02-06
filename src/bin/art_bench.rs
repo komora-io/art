@@ -167,7 +167,7 @@ fn main() {
     dbg!(before_reads.elapsed());
 
     let before_scan = std::time::Instant::now();
-    assert_eq!(btree.iter().count() as u64, N);
+    assert_eq!(btree.len() as u64, N);
     println!("full scan took {:?}", before_scan.elapsed());
 
     freed();
@@ -215,7 +215,7 @@ fn main() {
     dbg!(before_reads.elapsed());
 
     let before_scan = std::time::Instant::now();
-    assert_eq!(hash.iter().count() as u64, N);
+    assert_eq!(hash.len() as u64, N);
     println!("full scan took {:?}", before_scan.elapsed());
 
     freed();
