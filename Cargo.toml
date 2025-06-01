@@ -1,10 +1,10 @@
 [package]
 name = "art"
-version = "0.1.3"
-edition = "2021"
-authors = ["Tyler Neely <t@jujit.su>"]
+version = "1.0.0"
+edition = "2024"
+authors = ["Tyler Neely <tylerneely@gmail.com>"]
 description = "adaptive radix trie"
-license = "GPL-3.0"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/spacejam/art"
 documentation = "https://docs.rs/art/"
 

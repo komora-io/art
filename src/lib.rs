@@ -1110,7 +1110,7 @@ impl<V> Default for Node1<V> {
 }
 
 impl<V> Node1<V> {
-    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         std::iter::once((self.key, &self.slot))
     }
 
@@ -1154,7 +1154,7 @@ impl<V> Default for Node4<V> {
 }
 
 impl<V> Node4<V> {
-    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         let mut pairs: [(u8, &Node<V>); 4] = [
             (self.keys[0], &self.slots[0]),
             (self.keys[1], &self.slots[1]),
@@ -1259,7 +1259,7 @@ impl<V> Default for Node16<V> {
 }
 
 impl<V> Node16<V> {
-    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         let mut pairs: [(u8, &Node<V>); 16] = [
             (self.keys[0], &self.slots[0]),
             (self.keys[1], &self.slots[1]),
@@ -1411,7 +1411,7 @@ impl<V> Default for Node48<V> {
 }
 
 impl<V> Node48<V> {
-    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         self.child_index
             .iter()
             .enumerate()
@@ -1488,7 +1488,7 @@ struct Node256<V> {
 }
 
 impl<V> Node256<V> {
-    fn iter<'a>(&'a self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
+    fn iter(&self) -> impl DoubleEndedIterator<Item = (u8, &Node<V>)> {
         self.slots
             .iter()
             .enumerate()
