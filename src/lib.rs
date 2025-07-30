@@ -64,11 +64,7 @@ impl<V: PartialEq, const K: usize> PartialEq for Art<V, K> {
             }
         }
 
-        if other_iter.next().is_none() {
-            true
-        } else {
-            false
-        }
+        other_iter.next().is_none()
     }
 }
 
@@ -221,7 +217,7 @@ impl<V, const K: usize> Art<V, K> {
     }
 
     pub fn get(&self, key: &[u8; K]) -> Option<&V> {
-        let mut k: &[u8] = &*key;
+        let mut k: &[u8] = key;
         let mut cursor: &Node<V> = &self.root;
 
         while !k.is_empty() {
@@ -236,8 +232,8 @@ impl<V, const K: usize> Art<V, K> {
         }
 
         match cursor.deref() {
-            NodeRef::Value(ref v) => return Some(v),
-            NodeRef::None => return None,
+            NodeRef::Value(v) => Some(v),
+            NodeRef::None => None,
             _ => unreachable!(),
         }
     }
@@ -246,7 +242,7 @@ impl<V, const K: usize> Art<V, K> {
         self.range(..)
     }
 
-    pub fn range<'a, R>(&'a self, range: R) -> Iter<'a, V, K>
+    pub fn range<R>(&self, range: R) -> Iter<'_, V, K>
     where
         R: RangeBounds<[u8; K]>,
     {
@@ -417,7 +413,7 @@ impl<'a, V, const K: usize> Iterator for Iter<'a, V, K> {
             let can_return = in_bounds && !finished;
             self.finished_0 = true;
             match self.root.node.deref() {
-                NodeRef::Value(ref v) if can_return => return Some(([0; K], v)),
+                NodeRef::Value(v) if can_return => return Some(([0; K], v)),
                 NodeRef::Value(_) | NodeRef::None => return None,
                 _ => unreachable!(),
             }
@@ -497,7 +493,7 @@ impl<'a, V, const K: usize> DoubleEndedIterator for Iter<'a, V, K> {
             let can_return = in_bounds && !finished;
             self.finished_0 = true;
             match self.root.node.deref() {
-                NodeRef::Value(ref v) if can_return => return Some(([0; K], v)),
+                NodeRef::Value(v) if can_return => return Some(([0; K], v)),
                 NodeRef::Value(_) | NodeRef::None => return None,
                 _ => unreachable!(),
             }
@@ -1899,16 +1895,16 @@ fn regression_03() {
 
         let mut b = k[1];
         // byte at index 0 is k[0]
-        for i in 1..5 {
+        for byte in ret.iter_mut().take(5).skip(1) {
             if b.leading_zeros() == 0 {
-                ret[i] = 255;
+                *byte = 255;
             }
             b = b.rotate_left(1);
         }
         // byte at index 5 is k[2]
-        for i in 6..10 {
+        for byte in ret.iter_mut().take(10).skip(6) {
             if b.leading_zeros() == 0 {
-                ret[i] = 255;
+                *byte = 255;
             }
             b = b.rotate_left(1);
         }
@@ -1975,9 +1971,7 @@ fn regression_06() {
 #[test]
 fn regression_07() {
     fn run<T: Default>() {
-        let _ = [([], Default::default())]
-            .into_iter()
-            .collect::<Art<(), 0>>();
+        let _ = [([], T::default())].into_iter().collect::<Art<T, 0>>();
     }
     run::<()>();
     run::<u8>();
